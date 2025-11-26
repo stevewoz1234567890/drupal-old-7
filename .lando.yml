@@ -1,0 +1,50 @@
+name: this-american-life
+recipe: pantheon
+config:
+  framework: drupal
+  site: this-american-life
+  id: 00c27aed-9b01-40c5-b7a8-f736c46b8ddd
+  xdebug: false
+
+proxy:
+  edge:
+    - thislife.marq
+
+services:
+  appserver:
+    overrides:
+      environment:
+        XDEBUG_MODE: 'debug,develop'
+      volumes:
+        - ./secrets/secrets-lando.json:/files/private/secrets-lando.json
+    config:
+      php: .vscode/php.ini
+
+tooling:
+  drush:
+    version: 8.4
+  xdebug-on:
+    service: appserver
+    description: Enable Xdebug.
+    user: root
+    cmd:
+      - docker-php-ext-enable xdebug && kill -USR2 $(pgrep -o php-fpm) > /dev/null || /etc/init.d/apache2 reload
+      - tput setaf 2 && echo "Xdebug On" && tput sgr 0 && echo
+
+  xdebug-off:
+    service: appserver
+    description: Disable Xdebug.
+    user: root
+    cmd:
+      - rm /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini && kill -USR2 $(pgrep -o php-fpm) > /dev/null || /etc/init.d/apache2 reload
+      - tput setaf 1 && echo "Xdebug Off" && tput sgr 0 && echo
+
+  phantomjs:
+    service: appserver
+    cmd: /srv/bin/phantomjs
+  wkhtmltopdf:
+    service: appserver
+    cmd: /srv/bin/wkhtmltopdf
+  tika:
+    service: appserver
+    cmd: java -jar /srv/bin/tika-app-1.1.jar
