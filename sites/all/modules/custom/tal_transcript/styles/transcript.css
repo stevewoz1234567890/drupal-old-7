@@ -1,0 +1,8 @@
+div#torey {
+  margin: 10px auto;
+  width: 50%;
+  position: relative;
+}
+div#torey img {
+  max-width: 100%;
+}

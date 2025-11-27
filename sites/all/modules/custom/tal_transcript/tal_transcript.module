@@ -1,0 +1,590 @@
+<?php
+/**
+ * @file
+ * Code for the Transcript feature.
+ */
+
+include_once 'tal_transcript.features.inc';
+
+/**
+* Implementation of hook_menu().
+*/
+function tal_transcript_menu() {
+  $items = array();
+
+  $items['tal/cron/3play'] = array(
+    'page callback' => 'tal_transcript_3play_cron',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['admin/config/content/transcript'] = array(
+    'title' => 'Transcript capitalization',
+    'description' => 'Fix name formatting in transcripts.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('tal_transcript_capitalization_admin'),
+    'access arguments' => array('administer tal'),
+    'file' => 'tal_transcript.admin.inc',
+    'weight' => -10,
+  );
+
+  return $items;
+}
+
+function tal_transcript_node_access($node, $op, $account) {
+  $type = is_string($node) ? $node : $node->type;
+  if ($type == 'transcript') {
+    if ($op == 'view') {
+      if (user_access('create ' . $type . ' content', $account)) {
+        return NODE_ACCESS_ALLOW;
+      }
+      if ($items = field_get_items('node', $node, 'field_episode')) {
+        $episode = node_load($items[0]['target_id']);
+        if (!$episode->is_live) {
+          return NODE_ACCESS_DENY;
+        }
+      }
+    }
+  }
+
+
+  if (in_array($type, node_permissions_get_configured_types())) {
+    if ($op == 'create' && user_access('create ' . $type . ' content', $account)) {
+      return NODE_ACCESS_ALLOW;
+    }
+    if ($op == 'update') {
+      if (user_access('edit any ' . $type . ' content', $account) || user_access('edit own ' . $type . ' content', $account) && $account->uid == $node->uid) {
+        return NODE_ACCESS_ALLOW;
+      }
+    }
+    if ($op == 'delete') {
+      if (user_access('delete any ' . $type . ' content', $account) || user_access('delete own ' . $type . ' content', $account) && $account->uid == $node->uid) {
+        return NODE_ACCESS_ALLOW;
+      }
+    }
+  }
+
+  // Returning nothing from this function would have the same effect.
+  return NODE_ACCESS_IGNORE;
+}
+
+function tal_transcript_get_by_episode($node) {
+  $query = db_select('node', 'n');
+  $query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+  $query
+    ->fields('n', array('nid'))
+    ->condition('e.field_episode_target_id', $node->nid)
+    ->condition('n.status', 1)
+    ->condition('n.type', 'transcript');
+  if ($nid = $query->execute()->fetchField()) {
+    $transcript = node_load($nid);
+    return $transcript;
+  }
+  return false;
+}
+
+function tal_transcript_3play_cron() {
+  if ($api_key = variable_get('tal_transcript_3play_api_key', false)) {
+    $episodes = array();
+    $query = db_select('node', 'n');
+    $query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+    $query->join('field_data_field_episode_number', 'en', "(en.entity_id = e.field_episode_target_id AND en.entity_type ='node' AND en.deleted = 0)");
+    $query->leftJoin('field_data_field_3play', 'tp', "(tp.entity_id = n.nid AND tp.entity_type ='node' AND tp.deleted = 0)");
+    $query
+      ->fields('n', array('nid'))
+      ->fields('en', array('field_episode_number_value'))
+      ->fields('tp', array('field_3play_value'))
+      ->condition('n.type', 'transcript')
+      ->orderBy('en.field_episode_number_value', 'DESC');
+    $result = $query->execute();
+    foreach ($result as $row) {
+      $episodes[$row->field_episode_number_value] = array(
+        'nid' => $row->nid,
+        'episode' => $row->field_episode_number_value,
+        '3play' => $row->field_3play_value,
+      );
+    }
+    $pages = 1;
+    $max = 1;
+    for ($i = 1; $i <= $max; $i++) {
+      $params = array(
+        'per_page' => 100,
+        'page' => $i,
+        'q' => 'state=complete,delivered',
+        'apikey' => $api_key,
+      );
+      $url = url('http://api.3playmedia.com/files', array('query' => $params));
+      $response = drupal_http_request($url);
+      $data = json_decode($response->data);
+      if (!empty($data->summary->total_pages) && $data->summary->total_pages > $pages) {
+        $max = $data->summary->total_pages;
+      }
+      if (!empty($data->files)) {
+        foreach ($data->files as $file) {
+          $filename = trim($file->name);
+          if (preg_match("/^(\d+)(\.mp3)?$/i", $filename, $matches)) {
+            $episode_number = $matches[1];
+            // Create new transcript node if one does not exist for this episode
+            if (empty($episodes[$episode_number])) {
+              if ($episode = tal_episode_number_load($episode_number)) {
+                $node = new stdClass();
+                $node->language = LANGUAGE_NONE;
+                $node->type = 'transcript';
+                node_object_prepare($node);
+                $node->uid = 1;
+                $node->name = 'rorris';
+                $node->field_episode[LANGUAGE_NONE][] = array(
+                  'target_id' => $episode->nid,
+                  'target_type' => 'node',
+                );
+                $node->field_3play[LANGUAGE_NONE][0]['value'] = $file->id;
+                node_save($node);
+
+                $episodes[$episode_number] = array(
+                  'nid' => $node->nid,
+                  'episode' => $episode_number,
+                  '3play' => $file->id,
+                );
+              }
+            }
+
+            // We've got a new transcript
+            elseif ($episodes[$episode_number]['3play'] != $file->id && $file->id > $episodes[$episode_number]['3play']) {
+              tal_debug($episode_number, false);
+              if ($transcript = node_load($episodes[$episode_number]['nid'])) {
+                $transcript->field_3play[LANGUAGE_NONE][0]['value'] = $file->id;
+                $transcript->field_transcript_xml[LANGUAGE_NONE] = array();
+                $transcript->field_transcript_json[LANGUAGE_NONE] = array();
+                node_save($transcript);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  exit;
+}
+
+function tal_transcript_form_transcript_node_form_alter(&$form, &$form_state, $form_id) {
+  $form['title']['#access'] = false;
+  $form['field_transcript_xml']['#disabled'] = true;
+  $form['field_transcript_json']['#disabled'] = true;
+}
+
+function tal_transcript_node_presave($node) {
+  if ($node->type == 'transcript') {
+    if ($items = field_get_items('node', $node, 'field_episode')) {
+      $episode = node_load($items[0]['target_id']);
+      $title = array();
+      if ($items = field_get_items('node', $episode, 'field_episode_number')) {
+        $episode_number = $items[0]['value'];
+        $title[] = $episode_number;
+        $node->path['alias'] = $episode_number.'/transcript';
+      }
+      $title[] = $episode->title;
+      $node->title = implode(': ', $title);
+    }
+    if ($items = field_get_items('node', $node, 'field_3play')) {
+      $id = $items[0]['value'];
+      if ($api_key = variable_get('tal_transcript_3play_api_key', false)) {
+        $params = array(
+          'apikey' => $api_key,
+          'time' => REQUEST_TIME
+        );
+        foreach (array('json', 'xml') as $type) {
+          $field = 'field_transcript_'.$type;
+          $url = url('https://api.3playmedia.com/files/'.$id.'/transcript.'.$type, array('query' => $params));
+          $response = drupal_http_request($url);
+          if ($response->code == 200) {
+            $data = $response->data;
+            $json_data = drupal_json_decode($data);
+            if (!empty($json_data['iserror'])) {
+              unset($data);
+            }
+            if (empty($data)) {
+              $node->{$field}[LANGUAGE_NONE] = array();
+              drupal_set_message(t('!type transcript could not be updated.', array('!type' => strtoupper($type))), 'error');
+            }
+            else {
+              $node->{$field}[LANGUAGE_NONE][0]['value'] = $data;
+              drupal_set_message(t('!type transcript has been reloaded.', array('!type' => strtoupper($type))));
+            }
+          }
+          else {
+            drupal_set_message(t('!type transcript could not be updated.', array('!type' => strtoupper($type))), 'error');
+          }
+        }
+      }
+    }
+  }
+}
+
+function tal_transcript_node_view($node, $view_mode) {
+  if ($node->type == 'transcript') {
+    if ($view_mode == 'full') {
+      $episode = false;
+      if ($items = field_get_items('node', $node, 'field_episode')) {
+        $episode = node_load($items[0]['target_id']);
+      }
+      if ($items = field_get_items('node', $node, 'field_transcript_xml')) {
+        $contents = $items[0]['value'];
+        $contents = str_replace(array('<i></i>', 'AT&T', '&lt;i&gt;', '&lt;/i&gt;'), array('', 'AT&amp;T', '<i>', '</i>'), $contents);
+        $xml = simplexml_load_string($contents);
+        $xml = $xml->body;
+        $acts = $xml->act;
+        if (!empty($acts)) {
+          $total_acts = count($acts);
+          $act_count = 0;
+          foreach ($acts as $act) {
+            if (!empty($act->speaker)) {
+              $node->content['transcript'][] = array(
+                '#theme' => 'tal_transcript_act',
+                '#act' => $act,
+                '#node' => $episode,
+                '#count' => $act_count,
+                '#total_acts' => $total_acts,
+              );
+              $act_count++;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ *    Utilizes hook_preprocess_node
+ *
+ *      - add styles/transcript.css
+ *      - generate torey img tag
+ */
+function tal_transcript_preprocess_node(&$variables) {
+  $node = $variables['node'];
+  $view_mode = $variables['view_mode'];
+
+  if ($node->type == "transcript" && $view_mode == "full") {
+    $img_path = '/' . drupal_get_path('module', 'tal_transcript') . '/images';
+    $image = array(
+      "path" =>"$img_path/torey.png",
+      "alt" => t("Thanks as always to our program's co-founder Torey Malatia"),
+      "title" => "Thanks Torey",
+      'attributes' => array(
+        "loading" => "lazy",
+        "srcset" => "$img_path/torey_thumbnail.png 400w, $img_path/torey_medium.png 800w, $img_path/torey_large.png 2x")
+    );
+
+    $variables['torey'] = theme_image($image);
+    drupal_add_css(drupal_get_path('module', 'tal_transcript') . '/styles/transcript.css');
+  }
+}
+
+/**
+ * undocumented function
+ */
+function template_preprocess_tal_transcript_act(&$variables) {
+  $names_find = array();
+  $names_replace = array();
+  if ($text = variable_get('tal_transcript_capitalization', '')) {
+    if (preg_match_all('/([^|\r\n]+)\|([^\r\n]+)/i', $text, $matches, PREG_SET_ORDER)) {
+      foreach ($matches as $match) {
+        $names_find[] = trim($match[1]);
+        $names_replace[] = trim($match[2]);
+      }
+    }
+  }
+
+  $act = $variables['act'];
+  $node = $variables['node'];
+  $count = $variables['count'];
+  if ($acts = field_get_items('node', $node, 'field_acts')) {
+    if (!empty($acts[$count]['target_id'])) {
+      $nid = $acts[$count]['target_id'];
+      if ($act_node = node_load($nid)) {
+        $title = array($act_node->title);
+        if ($items = field_get_items('node', $act_node, 'field_act_label')) {
+          array_unshift($title, $items[0]['safe_value']);
+        }
+        $variables['title'] = implode(': ', $title);
+        if ($variables['count'] == 0) {
+          $variables['name'] = 'prologue';
+        }
+        else if (($variables['count'] + 1) == $variables['total_acts']) {
+          $variables['name'] = 'credits';
+        }
+        else {
+          $variables['name'] = 'act'.$variables['count'];
+        }
+      }
+    }
+  }
+  if (empty($variables['title'])) {
+    if ($variables['count'] == 0) {
+      $variables['name'] = 'prologue';
+      $variables['title'] = 'Prologue';
+    }
+    else if (($variables['count'] + 1) == $variables['total_acts']) {
+      $variables['name'] = 'credits';
+      $variables['title'] = 'Credits';
+    }
+    else {
+      $variables['name'] = 'act'.$variables['count'];
+      $variables['title'] = 'Act '.$variables['count'];
+    }
+  }
+  $variables['speakers'] = '';
+  $speakers = $act->speaker;
+  if (!empty($speakers)) {
+    $host = '';
+    foreach ($speakers as $speaker) {
+      preg_match('/\((\w+)\)\s?([\w\s\.\'-]*)?/i', ((string) $speaker->attributes()->title), $matches);
+      if (count($matches) < 3 ) continue;
+      $role = drupal_html_class($matches[1]);
+      $name = ucwords(strtolower($matches[2]));
+      $name = str_replace($names_find, $names_replace, $name);
+
+      $variables['speakers'] .= '<div class="'.$role.'">';
+      if ($role == 'host') {
+        if ($host != $name) {
+          $variables['speakers'] .= '<h4>'.$name.'</h4>';
+          $host = $name;
+        }
+      }
+      else {
+        $variables['speakers'] .= '<h4>'.$name.'</h4>';
+        $host = $name;
+      }
+      $ps = $speaker->p;
+      foreach ($ps as $p) {
+        $html = htmlspecialchars_decode(check_markup($p->asXML(), 'full_html'), ENT_NOQUOTES);
+        if (preg_match('/<p.*begin=\"([^\"]+)\">/', $html, $match)) {
+          $find = substr($match[0], 0, -1);
+          $replace = $find.' data-timestamp="'.tal_time_to_seconds($match[1]).'"';
+          $html = str_replace($find, $replace, $html);
+        }
+        $variables['speakers'] .= $html;
+      }
+      $variables['speakers'] .= '</div>';
+    }
+  }
+}
+
+/**
+* Implementation of hook_theme().
+*/
+function tal_transcript_theme($existing, $type, $theme, $path) {
+  return array(
+    'tal_transcript_act' => array(
+      'template' => 'tal-transcript-act',
+      'variables' => array('node' => null, 'act' => null, 'count' => 0, 'total_acts' => 0),
+      'path' => $path.'/templates',
+    ),
+  );
+}
+
+function tal_transcript_common_words() {
+  return array(
+    'more stories',
+    'next week',
+    'wbez chicago',
+    'this american life',
+    'ira glass',
+    'week',
+    'thisamericanlifeorg',
+    'co-founder',
+    'tony malatia',
+    'tory malatia',
+    'is',
+    'are',
+    'says',
+    'asks',
+    'ones',
+    "it'd",
+    'own',
+    'where',
+    'whose',
+    'wants',
+    'got',
+    'means',
+    'came',
+    'a lot',
+    'had',
+    'has',
+    'keep',
+    'keeps',
+    'off',
+    'on',
+    'away',
+    'ok',
+    'website',
+    'podcast',
+    "it's",
+    "I'd",
+    "I've",
+    "We're",
+    'very',
+    "I'll",
+    "didn't",
+    "don't",
+    'else',
+    "he's",
+    "you're",
+    "can't",
+    "isn't",
+    "he'd",
+    "she's",
+    'act',
+    "they'll",
+    "won't",
+    "they're",
+    "there's",
+    "that's",
+    "I'm",
+    "who's",
+    "you've",
+    "let's",
+    "here's",
+    "doesn't",
+    "they're",
+    "they'll",
+    "you'll",
+    "we've",
+    "hadn't",
+    "he'll",
+    "she'll",
+    "you'd",
+    "we'll",
+    "you'd",
+    "she'd",
+    "he'd",
+    "wasn't",
+    "what's",
+    "couldn't",
+    "aren't",
+    "they'd",
+    "weren't",
+    "we'd",
+    "who'd",
+    "they've",
+    "wouldn't",
+    "one's",
+    "must've",
+    "ain't",
+    "said",
+    "did",
+    "here",
+    'next',
+    'once',
+    'while',
+    'ever',
+    'until',
+    'went',
+    'each',
+    'next',
+    'again',
+    'thing',
+    'took',
+    'used',
+    'the',
+    'be',
+    'to',
+    'of',
+    'and',
+    'a',
+    'in',
+    'that',
+    'have',
+    'I',
+    'it',
+    'for',
+    'not',
+    'on',
+    'with',
+    'he',
+    'as',
+    'you',
+    'do',
+    'at',
+    'this',
+    'but',
+    'his',
+    'by',
+    'from',
+    'they',
+    'we',
+    'say',
+    'her',
+    'she',
+    'or',
+    'will',
+    'an',
+    'my',
+    'one',
+    'all',
+    'would',
+    'there',
+    'their',
+    'what',
+    'so',
+    'up',
+    'out',
+    'if',
+    'about',
+    'who',
+    'get',
+    'which',
+    'go',
+    'when',
+    'me',
+    'make',
+    'can',
+    'like',
+    'time',
+    'no',
+    'just',
+    'him',
+    'know',
+    'take',
+    'person',
+    'into',
+    'year',
+    'your',
+    'good',
+    'some',
+    'could',
+    'them',
+    'see',
+    'other',
+    'than',
+    'then',
+    'now',
+    'look',
+    'only',
+    'come',
+    'its',
+    'over',
+    'think',
+    'also',
+    'back',
+    'after',
+    'use',
+    'two',
+    'how',
+    'our',
+    'work',
+    'first',
+    'well',
+    'way',
+    'even',
+    'new',
+    'want',
+    'because',
+    'any',
+    'these',
+    'give',
+    'day',
+    'most',
+    'us',
+  );
+}
