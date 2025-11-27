@@ -1,0 +1,15 @@
+{
+  "name": "drupal/globalredirect",
+  "type": "drupal-module",
+  "description": "Searches for an alias of the current URL and 301 redirects if found. Stops duplicate content arising when path module is enabled.",
+  "keywords": ["Drupal"],
+  "license": "GPL-2.0+",
+  "authors": [],
+  "support": {},
+  "require": {
+
+  },
+  "require-dev": {
+
+  }
+}

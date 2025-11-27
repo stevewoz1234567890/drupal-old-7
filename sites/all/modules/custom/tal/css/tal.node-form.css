@@ -1,0 +1,103 @@
+
+form.node-form .error {
+  background: none;
+}
+
+form.node-form .error label {
+  color: red;
+}
+
+form.node-form .error input.form-text {
+  border: 1px solid red;
+}
+
+form#episode-node-form .field-widget-file-generic .description {
+  display: none;
+}
+
+form .filter-wrapper {
+  display: none;
+}
+
+form.node-form input.form-text {
+  border: 1px solid #ccc;
+  font-size: 14px;
+  line-height: 18px;
+  padding: 6px 10px;
+}
+
+form.node-form select {
+  font-size: 14px;
+  height: 32px;
+  line-height: 18px;
+  padding: 0 10px;
+}
+
+form.node-form .field-type-date select {
+  height: 32px;
+  font-size: 14px;
+}
+
+form.node-form .field-type-media,
+form.node-form .text-format-wrapper,
+form.node-form .form-item {
+  margin: 0 0 24px;
+  padding: 0;
+}
+
+form.node-form .form-item label {
+  margin: 0 0 4px;
+}
+
+form.node-form .text-format-wrapper .form-item,
+form.node-form .form-item .form-item {
+  margin: 0;
+}
+
+form.node-form .form-item .form-checkboxes .form-item {
+  margin: 0 0 4px;
+}
+
+form.node-form .form-item .form-checkboxes .form-item label {
+  margin-left: 4px;
+}
+
+html.js form.node-form input.form-autocomplete {
+  background: none;
+}
+
+form.node-form .field-name-field-image .form-type-media {
+  margin: 0 0 8px;
+}
+
+form.node-form .field-widget-media-generic .form-item label {
+  margin: 0 0 12px;
+  display: block;
+}
+
+form.node-form .field-widget-media-generic .form-item-field-image-shared label {
+  display: inline-block;
+}
+
+form.node-form .field-widget-media-generic .form-item .description {
+  margin: 12px 0 0;
+}
+
+form.node-form .field-name-field-tags input.form-text {
+  width: 100%;
+  -webkit-box-sizing: border-box;
+  -moz-box-sizing: border-box;
+  box-sizing: border-box;
+}
+
+form.node-form .field-name-body .cke_contents {
+  height: 200px !important;
+}
+
+form.node-form .field-name-body .text-summary-wrapper .cke_contents {
+  height: 100px !important;
+}
+
+form.node-form .field-type-entityreference .container-inline.form-wrapper .form-type-select {
+  display: none;
+}

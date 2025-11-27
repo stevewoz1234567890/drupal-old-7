@@ -1,0 +1,46 @@
+section.promo > div {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+section.promo div.image:not(.mobile_image) {
+  display: none;
+}
+section.promo div.image img {
+  width: 100%;
+  height: auto;
+}
+section.promo div.text {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 2rem 0;
+}
+section.promo div.text h2 {
+  margin: 0;
+}
+
+@media only screen and (min-width: 1024px) {
+  section.promo > div {
+    flex-direction: row;
+    gap: 10%;
+    max-width: 1120px;
+    margin: 0 auto;
+    padding-left: 2rem;
+  }
+  section.promo div.text {
+    flex-basis: 60%;
+  }
+  section.promo div.image {
+    padding: 2rem;
+    flex-basis: 35%;
+  }
+  section.promo div.image:not(.mobile_image) {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  section.promo div.mobile_image {
+    display: none;
+  }
+}
