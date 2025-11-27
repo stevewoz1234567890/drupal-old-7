@@ -1,0 +1,61 @@
+<?php
+
+function tal_welcome_schema() {
+  $schema['tal_welcome_codes'] = array(
+    'fields' => array(
+      'sid' => array(
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'station' => array(
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'generated' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'activated' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'indexes' => array(
+      'sid' => array(
+        'sid',
+      ),
+      'nid' => array(
+        'nid',
+      ),
+      'station' => array(
+        'station',
+      ),
+    ),
+    'primary key' => array(
+      'sid', 'nid',
+    ),
+  );
+  return $schema;
+}
+
+/**
+ * Create {tal_welcome_codes} table.
+ */
+function tal_welcome_update_7000() {
+  $schema = tal_welcome_schema();
+  db_create_table('tal_welcome_codes', $schema['tal_welcome_codes']);
+}
