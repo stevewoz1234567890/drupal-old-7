@@ -1,0 +1,6 @@
+Global Redirect 7.x-1.x, xxxx-xx-xx (development version)
+-----------------------
+
+Global Redirect 7.x-1.7, 2025-04-02
+-----------------------
+- Fix security issue where is_dir can do http requests if remote_stream_wrapper module enabled.
