@@ -1,0 +1,54 @@
+main div.content {
+  --accent-color: #ed0100;
+  --accent-color-text: white;
+}
+.bg-royal-blue {
+  --tw-bg-opacity:1;
+  background-color:rgb(2 19 91/var(--tw-bg-opacity))
+}
+
+#be-ours a:not(.btn) {
+  color: white;
+  text-decoration:  underline;
+}
+
+.border {
+  border-style: solid;
+}
+
+supercast-plan, supercast-purchase {
+  display: flex;
+  flex-grow: 1;
+  flex-direction: column;
+	--supercast-button-background-color: #ed0100;
+}
+
+#subscribe.show-month #year {
+  height: 0;
+  overflow: hidden;
+}
+#subscribe:not(.show-month) #month {
+  height: 0;
+  overflow: hidden;
+}
+.toggle-container {
+  background: #4338ca;
+}
+#subscribe a {
+  border: black;
+}
+#subscribe.show-month a#month-toggle,
+#subscribe:not(.show-month) a#year-toggle {
+  background: #3730a3;
+  color: #eff6ff;
+  border: none;
+}
+
+@media only screen and (min-width: 768px) {
+  supercast-plan, supercast-purchase {
+    flex-direction: row;
+  }
+}
+@media only screen and (max-width: 1023px) {
+
+}

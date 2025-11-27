@@ -1,0 +1,36 @@
+.manual-actions-wrapper hr {
+    margin-bottom: 1em;
+}
+.manual-actions-wrapper .manual-action-group {
+    display: flex;
+}
+.manual-actions-wrapper .manual-action-group * {
+    vertical-align: middle;
+}
+.manual-actions-wrapper .manual-action-group > *,
+form.node-form .manual-actions-wrapper .form-item {
+    margin: 1em;
+}
+form.node-form .manual-actions-wrapper .form-item {
+    height: auto;
+}
+
+#manual-operation-results {
+    padding: 1em;
+}
+@keyframes highlightOnAppear {
+    0% {
+      background: yellow;
+      opacity: 0;
+    }
+    100% {
+        background: inherit;
+        opacity: 100%;
+    }
+}
+#manual-operation-results div.result {
+    animation: 1s ease-out 0s 1 highlightOnAppear;
+
+    padding: 0.5em;
+    display: list-item;
+}

@@ -1,0 +1,245 @@
+<?php
+
+/**
+ * @file
+ * Code for the Membership feature.
+ */
+
+include_once 'tal_membership.features.inc';
+
+/**
+ * Implements hook_theme.
+ *
+ * @param array $existing
+ * @param string $type
+ * @param string $theme
+ * @param string $path
+ * @return void
+ *
+ * @see https://api.drupal.org/api/drupal/modules%21system%21system.api.php/function/hook_theme/7.x
+ */
+function tal_membership_theme($existing, $type, $theme, $path) {
+    return array(
+      'modal' => array(
+        'variables' => array('node' => null),
+        'template' => 'modal',
+        'path' => $path.'/templates',
+      ),
+      'eyebrow' => array(
+        'variables' => array('node' => null),
+        'template' => 'eyebrow',
+        'path' => $path.'/templates',
+      ),
+      'rss_extra' => array(
+        'variables' => array('node' => null),
+        'template' => 'rss-extra',
+        'path' => $path.'/templates',
+      ),
+    );
+}
+
+/**
+ * Initiate variables for eyebrow.tpl.php
+ *
+ * @param array $vars
+ * @return void
+ */
+function template_preprocess_eyebrow(&$vars) {
+    $node = $vars['node'];
+    $wrapper = entity_metadata_wrapper('node',$node);
+    $vars['content'] = $wrapper->field_body->value();
+    $bg = $wrapper->field_background_color->value();
+    $text = $wrapper->field_text_color->value();
+    $vars['bgcolor'] = (isset($bg)) ? " style='background: ".$bg['rgb'].";'" : '';
+    $vars['text'] = (isset($text)) ? " style='color: ".$text['rgb'].";'" : '';
+}
+
+/**
+ * Initiate variables for modal.tpl.php
+ *
+ * @param array $vars
+ * @return void
+ */
+function template_preprocess_modal(&$vars) {
+  $node = $vars['node'];
+  $wrapper = entity_metadata_wrapper('node',$node);
+
+  $vars['title'] = $node->title;
+  $vars['content'] = $wrapper->field_body->value();
+  $vars['cta_link'] = $wrapper->field_cta_link->value();
+
+  foreach (['image', 'mobile_image'] as $key) {
+    $img = $wrapper->{"field_$key"}->value();
+    $img['path'] = $img['uri'];
+    $vars[$key] = theme_image($img);
+  }
+}
+
+/**
+ * Initiate variables for rss-extra.tpl.php
+ *
+ * @param array $vars
+ * @return void
+ */
+function template_preprocess_rss_extra(&$vars) {
+  $node = $vars['node'];
+  $wrapper = entity_metadata_wrapper('node',$node);
+
+  //  pubdate
+  $time = $wrapper->field_radio_air_date->value();
+  $vars['pubDate'] = date('r', $time);
+  //  description
+  $description = $wrapper->field_body->value();
+  $vars['description'] = str_replace("&nbsp;", " ", $description);
+  //  enclosure - text field first and then audio file field
+  $enclosure = $wrapper->field_enclosure->value();
+  $file = $wrapper->field_audio_extra->value();
+  $vars['enclosure'] = $enclosure ?: file_create_url($file['uri']);
+  //  image
+  $img = $wrapper->field_rss_image->value();
+  $vars['image'] =  image_style_url('rss_image', $img['uri']);
+  //  youtube image
+  $img = $wrapper->field_youtube_image->value();
+  $vars['youtube_image'] =  file_create_url($img['uri']);
+  //  tags
+  $tags = $wrapper->field_rss_item_tags->value();
+  $vars['tags'] = [];
+  foreach ($tags as $tag) {
+    $tagwrap = entity_metadata_wrapper('field_collection_item', $tag);
+    $name = $tagwrap->field_tag_name->value();
+    $value = $tagwrap->field_value->value();
+    $vars['tags'][$name] = $value;
+  }
+}
+
+/**
+ * Implements hook_preprocess_page.
+ *
+ * @param array $vars
+ * @return void
+ */
+function tal_membership_preprocess_page( &$vars ) {
+    //  Membership landing page
+    //   - add supercast js
+    //   - add add tailwind css
+    if (
+        (!empty($vars['node'])) &&
+        ($node = $vars['node']) &&
+        ($node->type == 'life_partner') &&
+        ($vars['directory'] == 'sites/all/themes/thislife')
+    ) {
+        //  Supercast js for embedded membership levels
+        drupal_add_js('https://thisamericanlife.supercast.com/js/embed.js','external');
+        //  FAQ & plan toggle js
+        $js_path = drupal_get_path('module', 'tal_membership') . '/js/membership.js';
+        drupal_add_js($js_path);
+        //  Tailwind
+        $css_path = drupal_get_path('module', 'tal_membership') . '/css/tailwind.css';
+        drupal_add_css($css_path);
+        //  Custom css
+        $css_path = drupal_get_path('module', 'tal_membership') . '/css/membership.css';
+        drupal_add_css($css_path);
+    }
+
+    //  Modal takeover and Eyebrow
+    foreach (['modal', 'eyebrow'] as $type) {
+      if ($node = tal_membership_check_for_node($type)) {
+        //  theme
+        $vars[$type] = theme($type, ['node' => $node]);
+        //  js
+        $js_path = drupal_get_path('module', 'tal_membership') . "/js/$type.js";
+        drupal_add_js($js_path);
+        drupal_add_js([
+            $type => [
+                'expires' => $node->field_expires[LANGUAGE_NONE][0]['value'],
+                'excepted_paths' => (isset($node->field_excepted_paths)) ? $node->field_excepted_paths[LANGUAGE_NONE][0]['safe_value'] : '',
+            ],
+          ], 'setting');
+        //  css
+        $css_path = drupal_get_path('module', 'tal_membership') . "/css/$type.css";
+        drupal_add_css($css_path);
+      } else {
+        $vars[$type] = '';
+      }
+    }
+}
+
+/**
+ * Implements hook_preprocess_node.
+ *
+ * @param array $vars
+ * @return void
+ */
+function tal_membership_preprocess_node( &$vars ) {
+  if ($vars['type'] == 'life_partner') {
+    $node = $vars['node'];
+    $wrapper = entity_metadata_wrapper('node',$node);
+    //  Above the fold
+    $vars['header'] = $wrapper->field_header->value();
+    $vars['pitch'] = $wrapper->field_sales_pitch->value();
+    $vars['pitch_sub'] = $wrapper->field_sales_pitch_sub->value();
+    $vars['logo'] = $wrapper->field_membership_logo->value();
+    $vars['logo_mobile'] = $wrapper->field_membership_logo_mobile->value();
+    //  Subscription plans
+    $plans = $wrapper->field_membership_level->value();
+    foreach (['month','year'] as $id) {
+      $vars['levels'][$id] = [];
+      foreach ($plans as $plan) {
+        $vars['levels'][$id][] = str_replace('supercast-plan', "supercast-plan interval='$id'", $plan) ?: $plan;
+      }
+    }
+    //  Break
+    $vars['break_header'] = $wrapper->field_break_header->value();
+    $vars['break_text'] = $wrapper->field_break_text->value();
+    $vars['button_logo'] = $wrapper->field_button_logo->value();
+    $vars['button_link'] = $wrapper->field_button_link->value();
+
+    //  FAQ
+    $vars['faq_header'] = $wrapper->field_faq_header->value();
+    $vars['questions'] = $wrapper->field_questions->value();
+    $vars['cta'] = $wrapper->field_call_to_action->value();
+    $vars['cta_link'] = $wrapper->field_cta_link->value();
+  }
+}
+
+/**
+ * Load first published node of provided type.
+ *
+ * Used to load takeover modal and eyebrow if they exist.
+ *
+ * @return object|false
+ */
+function tal_membership_check_for_node($type = 'modal') {
+  $node = &drupal_static(__FUNCTION__ . $type);
+  if (!isset($node)) {
+    $query = "select nid from node
+    where type='$type'
+    and status=1
+    order by created desc
+    limit 1";
+    $nid = db_query($query)->fetchField();
+    return node_load($nid);
+  }
+  return $node;
+}
+
+/**
+ * Load all published nodes of provided type.
+ *
+ * Used to load RSS extras if they exist.
+ *
+ * @return object|false
+ */
+function tal_membership_check_for_all_nodes($type = 'rss_extra') {
+  $node = &drupal_static(__FUNCTION__ . $type);
+  if (!isset($node)) {
+    $query = "select nid from node
+    where type='$type'
+    and status=1
+    order by created desc";
+    $nids = db_query($query)->fetchAllAssoc('nid');
+    $nids = array_keys($nids);
+    return node_load_multiple($nids);
+  }
+  return $node;
+}
