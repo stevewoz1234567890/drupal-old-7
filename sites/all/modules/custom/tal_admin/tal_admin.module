@@ -1,0 +1,78 @@
+<?php
+
+/**
+ * @file
+ * Code for the Admin feature.
+ */
+
+include_once 'tal_admin.features.inc';
+
+/**
+* Implements hook_menu().
+*/
+function tal_admin_menu() {
+  $items['admin/tal'] = array(
+    'access arguments' => array('administer tal'),
+    'title' => 'TAL',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['admin/tal/email'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('tal_admin_email_settings_form'),
+    'access arguments' => array('administer tal'),
+    'title' => 'Email Notification Settings',
+    'file' => 'tal_admin.pages.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['admin/tal/page'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('tal_admin_page_settings_form'),
+    'access arguments' => array('administer tal'),
+    'title' => 'Page/Theme Settings',
+    'file' => 'tal_admin.pages.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_views_default_views_alter().
+ */
+function tal_admin_views_views_default_views_alter(&$views) {
+  $views_to_disable = array('admin_views_node');
+  foreach ($views_to_disable as $view) {
+    unset($views[$view]);
+  }
+}
+
+/**
+ * Implements hook_node_view.
+ *
+ *  Some node types are not made for public consumption:
+ *    - Modal
+ *    - Schedule
+ *
+ * @param object $node
+ * @param string $view_mode
+ * @param string $langcode
+ * @return string|null
+ *
+ * @see https://api.drupal.org/api/drupal/modules%21node%21node.api.php/function/hook_node_view/7.x
+ * @see https://drupal.stackexchange.com/questions/115264/node-access-based-on-view-mode
+ */
+function tal_admin_node_view($node, $view_mode, $langcode) {
+  if (
+      (in_array($node->type,['eyebrow','modal','schedule','rss_extra'])) &&
+      (!user_is_logged_in()) &&
+      ($view_mode == 'full')
+  ) {
+    //deny access
+    drupal_access_denied();
+    //avoids invoking other hooks
+    drupal_exit();
+  }
+}
+

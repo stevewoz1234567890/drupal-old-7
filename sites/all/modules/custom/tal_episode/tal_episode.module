@@ -1,0 +1,2565 @@
+<?php
+/**
+ * @file
+ * Code for the Episode feature.
+ */
+
+include_once 'tal_episode.features.inc';
+
+//  Constants
+const PODCAST_URL_PREFIX = 'https://pfx.vpixl.com/6qj4J/dts.podtrac.com/redirect.mp3/chrt.fm/track/138C95/pdst.fm/e/prefix.up.audio/s/';
+const AIR_DATE_LIVE_OFFSET = 48;
+
+//  Load include files
+module_load_include('inc', 'tal_episode', 'tal_episode.drush');
+module_load_include('inc', 'tal_episode', 'tal_episode.queue');
+module_load_include('inc', 'tal_episode', 'tal_episode.megaphone');
+
+/**
+* Implementation of hook_menu().
+*/
+function tal_episode_menu() {
+	$items = array();
+
+	$items['episode/%tal_episode_number'] = array(
+		'page callback' => 'tal_episode_redirect',
+		'page arguments' => array(1),
+		'access arguments' => array('access content'),
+		'title' => 'Redirect',
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['s/%tal_episode_number'] = array(
+		'page callback' => 'tal_episode_redirect',
+		'page arguments' => array(1),
+		'access arguments' => array('access content'),
+		'title' => 'Redirect',
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['radio-archives/episode/%tal_episode_number'] = array(
+		'page callback' => 'tal_episode_redirect',
+		'page arguments' => array(2),
+		'access arguments' => array('access content'),
+		'title' => 'Redirect',
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['playlist/episode/%tal_episode_number'] = array(
+		'page callback' => 'tal_episode_playlist_json',
+		'page arguments' => array(2),
+		'access arguments' => array('access content'),
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['podcast/rss.xml'] = array(
+		'page callback' => 'tal_episode_podcast_feed',
+		'access arguments' => array('access content'),
+		'file' => 'tal_episode.pages.inc',
+		'type' => MENU_CALLBACK,
+	);
+
+  	$items['podcast/youtube.xml'] = array(
+		'page callback' => 'tal_episode_youtube_feed',
+		'access arguments' => array('access content'),
+		'file' => 'tal_episode.pages.inc',
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['podcast/dovetail.xml'] = array(
+		'page callback' => 'tal_episode_podcast_feed',
+		'access arguments' => array('access content'),
+		'file' => 'tal_episode.pages.inc',
+		'type' => MENU_CALLBACK,
+	);
+
+	// Podtrac archive feed
+	$items['podcast/LDrlm36rFjbiSEgmQIKff8bnQyoolu6j/archive.xml'] = array(
+		'page callback' => 'tal_episode_archive_feed',
+		'access arguments' => array('access content'),
+		'file' => 'tal_episode.pages.inc',
+		'type' => MENU_CALLBACK,
+	);
+
+	// WBEZ App feed
+	$items['podcast/yeuv1ik1Tat1oSp6yA1quauc3eN2fI0W/all.xml'] = array(
+		'page callback' => 'tal_episode_all_feed',
+		'access arguments' => array('access content'),
+		'file' => 'tal_episode.pages.inc',
+		'type' => MENU_CALLBACK,
+	);
+
+	$items['tal/cron/queue/%/%'] = array(
+		'page callback' => 'tal_episode_queue_cron',
+		'page arguments' => array(3,4),
+		'access arguments' => array('access content'),
+		'file' => 'tal_episode.queue.inc',
+		'type' => MENU_CALLBACK,
+	);
+
+	return $items;
+}
+
+/**
+ * Implements hook_cron_queue_info.
+ *
+ * @return void
+ */
+function tal_episode_cron_queue_info() {
+  $queue_ids = ['audio'];
+  $queues = [];
+  foreach ($queue_ids as $qid) {
+    $queues["tal_episode_queue_$qid"] = [
+      'worker callback' => "tal_episode_queue_worker_$qid",
+      'time' => 180,
+      'skip on cron' => true,
+    ];
+  }
+
+  return $queues;
+}
+
+/**
+ * Implements hook_mail.
+ *
+ * @param string $key
+ * @param string $message
+ * @param array $params
+ * @return void
+ */
+function tal_episode_mail($key, &$message, $params) {
+  $options['language'] = $message['language'];
+  switch ($key) {
+    case "tal_episode_megaphone_cron_nyt":
+		$message['subject'] = $params['subject'];
+		$message['body'] = $params['body'];
+		break;
+	default:
+		$message['subject'] = $params['subject'];
+		$message['body'] = explode("\n", $params['body']);
+		break;
+  }
+}
+
+/**
+ * Implements hook_cron.
+ *
+ * @return void
+ */
+function tal_episode_cron() {
+	//  Send email to NYT
+	tal_episode_megaphone_cron_weekly('Wednesday', 'nyt');
+
+	//  Update Megaphone episode audio when transitioning from podcast to extended
+	tal_episode_megaphone_cron_weekly('Friday', 'extended');
+
+	//  Create stub episodes 1 year in advance
+	tal_episode_megaphone_cron_weekly('Saturday', 'stub');
+}
+
+/**
+ *    Return an array of the 10 Podcast Episodes
+ * 		- First get the four most current schedule nodes, which means there can be up to 4 reruns.
+ * 		- Then get 6 more episodes in descending order of air date.
+ *
+ * 	@param int $offset - number of hours to offset the feed by
+ * 	@return array - key and values are node ids of feed episode pages
+ */
+function tal_episode_podcast_episodes($offset = 0) {
+	$items = &drupal_static(__FUNCTION__ .  "_$offset");
+	if (!isset($items)) {
+		$items = array();
+		$offset = $offset*60*60;
+		$date = (REQUEST_TIME + $offset)-(AIR_DATE_LIVE_OFFSET*60*60);
+		$oldest = time();
+		$and = db_and()
+			->isNotNull('rd.field_release_date_value')
+			->condition('rd.field_release_date_value', date('c', $date), '<');
+		$or = db_or()
+			->condition('rad.field_radio_air_date_value', date('c', $date), '<')
+			->condition($and);
+		$query = db_select('node', 'n');
+		$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+		$query->leftJoin('field_data_field_release_date', 'rd', "(rd.entity_id = n.nid AND rd.entity_type ='node' AND rd.deleted = 0)");
+		$query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+		$query
+			->fields('e', array('field_episode_target_id'))
+			->fields('rad', array('field_radio_air_date_value'))
+			->condition('n.type', 'schedule')
+			->condition('n.status', 1)
+			->condition($or)
+			->orderBy('rad.field_radio_air_date_value', 'DESC')
+			->range(0,4);
+		$result = $query->execute();
+		foreach ($result as $row) {
+			$items[$row->field_episode_target_id] = $row->field_episode_target_id;
+			$oldest = strtotime($row->field_radio_air_date_value);
+		}
+		$date = ($oldest + $offset);
+		$query = db_select('node', 'n');
+		$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND entity_type ='node' AND deleted = 0)");
+		$query->join('field_data_field_simplecast', 'd', "(d.entity_id = n.nid AND d.entity_type ='node' AND d.deleted = 0)");
+		$query
+			->fields('n', array('nid'))
+			->fields('rad', array('field_radio_air_date_value'))
+			->condition('n.status', 1)
+			->condition('n.type', 'episode')
+			->condition('rad.field_radio_air_date_value', date('c', $date), '<')
+			->orderBy('rad.field_radio_air_date_value', 'DESC')
+			->range(0,6);
+		if (!empty($items)) {
+			$query->condition('n.nid', $items, 'NOT IN');
+		}
+		$result = $query->execute();
+		foreach ($result as $row) {
+			$items[$row->nid] = $row->nid;
+		}
+	}
+	return $items;
+}
+
+/**
+ * Given a node with audio, return an easily digestible JSON object of that node.
+ *
+ * @param object $node
+ * @param boolean $return - return the data rather than passing to drupal for http response
+ * @return void
+ */
+function tal_episode_playlist_json($node, $return = false) {
+	if ($node->status) {
+		$data = array(
+			'title' => $node->title,
+		);
+		if ($node->type == 'embed') {
+			if ($items = field_get_items('node', $node, 'field_audio_archive')) {
+				$download_file = file_create_url($items[0]['uri']);
+				$data['audio'] = $download_file;
+				$data['acts'] = array(
+					array(
+						'name' => $node->title,
+						'number' => 0,
+						'timestamp' => 0,
+					),
+				);
+			}
+			else {
+				if ($return) {
+					return;
+				}
+				else {
+					drupal_not_found();
+				}
+			}
+		}
+		else {
+			$data['guid'] = $node->nid.' at https://www.thisamericanlife.org';
+			$data['facebook'] = tal_share_url('facebook', $node);
+			$data['twitter'] = tal_share_url('twitter', $node);
+			$data['mail'] = tal_share_url('mail', $node);
+			if ($items = field_get_items('node', $node, 'field_image')) {
+				$file = $items[0];
+				$data['thumbnail'] = image_style_url('app_thumbnail', $file['uri']);
+			}
+			$query = db_select('node', 'n');
+			$query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+			$query
+				->fields('n', array('nid'))
+				->condition('e.field_episode_target_id', $node->nid)
+				->condition('n.status', 1)
+				->condition('n.type', 'transcript');
+			if ($nid = $query->execute()->fetchField()) {
+				$data['transcript'] = url('node/'.$nid);
+			}
+			if ($node->type == 'article') {
+				if ($items = field_get_items('node', $node, 'field_audio')) {
+					$data['title'] = $node->title;
+					$data['episode'] = 'extra-'.$node->nid;
+					$download_file = file_create_url($items[0]['uri']);
+					$data['audio'] = $download_file;
+					$data['acts'] = array(
+						array(
+							'name' => t('Extra'),
+							'number' => 0,
+							'timestamp' => 0,
+						),
+					);
+				}
+				else {
+					if ($return) {
+						return;
+					}
+					else {
+						drupal_not_found();
+					}
+				}
+			}
+			else {
+
+				// If podcast is live
+				if ($node->is_live) {
+					if ($items = field_get_items('node', $node, 'field_episode_number')) {
+						$episode = $data['episode'] = (int) $items[0]['value'];
+						$data['title'] = $episode.': '.$node->title;
+						if ($download_file = $node->download_url) {
+							$data['audio'] = $download_file;
+						}
+						if ($stream_file = tal_app_audio_stream($node)) {
+							$data['stream'] = $stream_file;
+						}
+					}
+
+					//  Add archive for use with seeking acts in web player
+					$items = field_get_items('node', $node, 'field_audio_archive');
+					$data['archive'] = file_create_url($items[0]['uri']);
+
+					if ($acts = field_get_items('node', $node, 'field_acts')) {
+						foreach ($acts as $item) {
+							if ($act = node_load($item['target_id'])) {
+								$nonact = false;
+								if ($items = field_get_items('node', $act, 'field_nonact')) {
+									$nonact = $items[0]['value'];
+								}
+								if (empty($nonact)) {
+									$act_data = array(
+										'name' => tal_episode_act_name($act),
+										'summary' => tal_episode_act_summary($act),
+									);
+									if ($items = field_get_items('node', $act, 'field_act_number')) {
+										$act_data['number'] = (int) $items[0]['value'];
+									}
+									if ($items = field_get_items('node', $act, 'field_timestamp')) {
+										$act_data['timestamp'] = (int) $items[0]['value'];
+									}
+									$byline = array();
+									if ($items = field_get_items('node', $act, 'field_contributor')) {
+										foreach ($items as $item) {
+											if ($contributor = (!empty($item['entity']) ? $item['entity'] : taxonomy_term_load($item['target_id']))) {
+												$byline[] = l($contributor->name, 'archive', array('query' => array('contributor' => $contributor->tid)));
+											}
+										}
+									}
+									if (!empty($byline)) {
+										$act_data['byline'] = t('By !contributors', array('!contributors' => implode(', ', $byline)));
+									}
+									$data['acts'][] = $act_data;
+								}
+							}
+						}
+					}
+				}
+				// If episode is not live, use promo audio
+				else if ($download_file = $node->download_url) {
+					$data['audio'] = $download_file;
+					$data['acts'] = array(
+						array(
+							'name' => t('Preview'),
+							'number' => 0,
+							'timestamp' => 0,
+						),
+					);
+					if ($items = field_get_items('node', $node, 'field_episode_number')) {
+						$episode = $data['episode'] = (int) $items[0]['value'];
+						$data['title'] = $episode.': '.$node->title;
+					}
+				}
+			}
+		}
+		if ($return) {
+			return $data;
+		}
+		else {
+			drupal_json_output($data);
+			drupal_exit();
+		}
+	}
+	if ($return) {
+		return;
+	}
+	else {
+		drupal_not_found();
+	}
+}
+
+function tal_episode_redirect($node) {
+	drupal_goto('node/'.$node->nid, array(), '301');
+}
+
+function tal_episode_act_name($node) {
+	$names = array();
+	if ($items = field_get_items('node', $node, 'field_act_label')) {
+		$names[] = $items[0]['value'];
+	}
+	else if ($items = field_get_items('node', $node, 'field_act_number')) {
+		if (!empty($items[0]['value'])) {
+			$names[] = t('Act !number', array('!number' => $items[0]['value']));
+		}
+	}
+	$names[] = $node->title;
+	return implode(': ', $names);
+}
+
+
+function tal_episode_act_summary($node, $view_mode = null) {
+	$body = '';
+	if ($items = field_get_items('node', $node, 'body')) {
+		if ($view_mode == 'footer') {
+			$body = $items[0]['value'];
+			if (!empty($items[0]['summary'])) {
+				$body = $items[0]['summary'];
+			}
+			$body = filter_xss($body, array('em'));
+			if (preg_match_all('/\.\s+[A-Z\(]+/', $body, $matches, PREG_OFFSET_CAPTURE)) {
+				if (!empty($matches[0][0][1])) {
+					$body = substr($body, 0, $matches[0][0][1]).'.';
+				}
+			}
+		}
+		else {
+			if (!empty($items[0]['summary'])) {
+				$body = $items[0]['summary'];
+			}
+			else if (!empty($items[0]['value'])) {
+				$body = $items[0]['value'];
+				if (preg_match_all('/\.\s+[A-Z\(]+/', $items[0]['value'], $matches, PREG_OFFSET_CAPTURE)) {
+					if (!empty($matches[0][1][1])) {
+						$body = substr($items[0]['value'], 0, $matches[0][1][1]).'.';
+					}
+					else if (!empty($matches[0][0][1])) {
+						$body = substr($items[0]['value'], 0, $matches[0][0][1]).'.';
+					}
+				}
+			}
+		}
+	}
+	$body = preg_replace('/[\n\r]/', '', $body);
+	return filter_xss($body, array('em'));
+}
+
+function tal_episode_number_load($episode_number) {
+	$query = db_select('node', 'n');
+	$query->join('field_data_field_episode_number', 'en', "(en.entity_id = n.nid AND en.entity_type ='node' AND en.deleted = 0)");
+	$query
+		->fields('n', array('nid'))
+		->condition('en.field_episode_number_value', $episode_number)
+		->condition('n.type', 'episode');
+	if ($nid = $query->execute()->fetchField()) {
+		$node = node_load($nid);
+		return $node;
+	}
+	return false;
+}
+
+function tal_episode_act_number_load($episode_number, $act_number) {
+	$query = db_select('node', 'n');
+	$query->join('field_data_field_act_number', 'an', "(an.entity_id = n.nid AND an.entity_type ='node' AND an.deleted = 0)");
+	$query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+	$query->join('field_data_field_episode_number', 'en', "(en.entity_id = e.field_episode_target_id AND en.entity_type ='node' AND en.deleted = 0)");
+	$query
+		->fields('n', array('nid'))
+		->condition('an.field_act_number_value', $act_number)
+		->condition('en.field_episode_number_value', $episode_number)
+		->condition('n.type', 'act');
+	if ($nid = $query->execute()->fetchField()) {
+		$node = node_load($nid);
+		return $node;
+	}
+	return false;
+}
+
+/**
+ * Get currently airing episode or next week's episode for preview
+ *
+ * @param boolean $currently_live - when set to true prevent preview result returning first
+ * @param int $result - which of the result set to return.  0 or 1.
+ * @return object|null - returns node object or null if not found
+ */
+function tal_episode_this_week ( bool $currently_live = false,  int $result = 0) {
+  	if (!in_array($result,[0,1])) throw new Error('result argument should be 0 or 1');
+	$results = &drupal_static(__FUNCTION__);
+	if (!isset($results)) {
+		$delta = ($currently_live) ? AIR_DATE_LIVE_OFFSET*60*60 : 0;
+		$start = REQUEST_TIME - (7*24*60*60) + $delta;
+		$startEarlyRelease = REQUEST_TIME - (7*24*60*60);
+		$query = db_select('node', 'n');
+		$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+		$query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+		$query->leftJoin('field_data_field_release_date', 'rd', "(rd.entity_id = n.nid AND rd.entity_type ='node' AND rd.deleted = 0)");
+		$query
+			->fields('e', array('field_episode_target_id'))
+			->fields('rad', array('field_radio_air_date_value'))
+			->fields('rd', array('field_release_date_value'))
+			->condition('n.type', 'schedule')
+			->condition('n.status', 1)
+			->orderBy('rad.field_radio_air_date_value', 'ASC')
+			->range(0,2);
+		// Check for early release
+		$and = db_and()
+			->isNotNull('rd.field_release_date_value')
+			->condition('rd.field_release_date_value', date('c', $startEarlyRelease), '>=');
+		$or = db_or()
+			->condition('rad.field_radio_air_date_value', date('c', $start), '>=')
+			->condition($and);
+		$query
+			->condition($or);
+		$results = $query->execute()->fetchAll();
+	}
+
+	if (
+		isset($results[$result]) &&
+		($episodeId = $results[$result]->field_episode_target_id) &&
+		($episode = node_load($episodeId)) &&
+		!empty($episode->status)
+	) {
+		$episode->field_radio_air_date[LANGUAGE_NONE][0]['value'] = $results[$result]->field_radio_air_date_value;
+		if (!empty($results[$result]->field_release_date_value)) {
+			$episode->field_release_date[LANGUAGE_NONE][0]['value'] = $results[$result]->field_release_date_value;
+		}
+		$node = $episode;
+	}
+
+	return $node;
+}
+
+/**
+ * For code clarity we include this wrapper around the above function.
+ *
+ * @return object|null - return node object or null if not found
+ */
+function tal_episode_next_week ( bool $current = false ) {
+  return tal_episode_this_week($current, 1);
+}
+
+function tal_episode_get_timestamp($node, $act) {
+	$timestamp = 0;
+	if ($items = field_get_items('node', $act, 'field_timestamp')) {
+		$timestamp = (int) $items[0]['value'];
+	}
+	if ($phase = $node->release_phase) {
+		if (in_array($phase, array('podcast', 'extended')) && ($node->download_url)) {
+			if ($items = field_get_items('node', $act, 'field_timestamp_dovetail')) {
+				$timestamp = (int) $items[0]['value'];
+			}
+		}
+		else if (($phase == 'archive') && ($node->download_url)) {
+			if ($items = field_get_items('node', $act, 'field_timestamp')) {
+				$timestamp = (int) $items[0]['value'];
+			}
+		}
+	}
+	return $timestamp;
+}
+
+/**
+ * Helper function that loads latest schedule node when given node id for an episode that schedules should relate to.
+ *
+ * @param string $episode_nid - numeric node Id of episode for which to load most recent related schedule
+ * @return void
+ */
+function tal_episode_get_latest_episode_schedule($episode_nid = null) {
+  if ($episode_nid) {
+    $query = db_select('node', 'n');
+    $query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+    $query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+    $query
+          ->fields('n', array('nid'))
+          ->condition('e.field_episode_target_id', $episode_nid)
+          ->condition('n.type', 'schedule')
+          ->condition('n.status', 1)
+          ->orderBy('rad.field_radio_air_date_value', 'DESC')
+          ->range(0,1);
+    if ($nid = $query->execute()->fetchField()) {
+      if ($schedule = node_load($nid)) {
+        return $schedule;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Implements hook_node_load.
+ *
+ *  EPISODE nodes:
+ * 		- get most recent schedule node that refers to this node and copy computed timestamps
+ *    - copy air date and early release date from schedule
+ *    - calculate release_timestamp, moment episode moves from preview to live
+ * 		- derive other timestamps from release_timestamp:
+ *      - preview_timestamp: moment moves from draft to preview
+ * 		- podcast_timestamp: moment episode moves from preview to podcast, same as release_timestamp*
+ *      - extended_timestamp: moment episode moves from live podcast version to live extended version
+ *      - archive_timestamp: moment episode moves from live extended version to archive version
+ *    - based on timestamps, determine some things we'll need to know most of the time we're dealing with episodes:
+ *      - is_live: true or false
+ * 		- in_feed: true or false
+ * 		- rerun: true or false
+ *      - current_release_phase: [ prerelease, preview, podcast, extended, archive ]
+ *      - audio_source_file
+ *      - audio_download_url
+ *
+ * @param array $nodes
+ * @param [type] $types
+ * @return void
+ */
+function tal_episode_node_load($nodes, $types) {
+	foreach ($nodes as $node) {
+
+		if ($node->type == 'episode') {
+			//  Defaults
+      //    Note: Server is ET time zone
+			$node->release_phases = $release_phases =  [
+				'preview' => 0,                                  // Friday at 7pm CT
+				'podcast' => AIR_DATE_LIVE_OFFSET,            // Sunday at 7pm CT
+				'extended' => (28*24)+AIR_DATE_LIVE_OFFSET,   // four weeks after going live
+				'archive' => (70*24+AIR_DATE_LIVE_OFFSET),    // 10 weeks after going live
+			];
+			$node->release_phase = 'prerelease';
+			$node->is_live = false;
+			$node->in_feed = false;
+			$node->rerun = false;
+			$node->air_date = false;
+			$node->early_release_date = false;
+			$node->release_timestamp = false;
+			$node->rss_timestamp = false;
+			$node->preview_timestamp = false;
+			$node->podcast_timestamp = false;
+			$node->extended_timestamp = false;
+			$node->archive_timestamp = false;
+			$node->audio_source_file = false;
+			$node->download_url = false;
+			$episode_wrapper = entity_metadata_wrapper('node', $node);
+			$feed = tal_episode_podcast_episodes();
+
+			//  1. Set air_date & early_release_date & rerun
+			//  	- Get most recent schedule and copy the relevant datetimes
+			//		- Determine if episode is rerun
+			if ($schedule = tal_episode_get_latest_episode_schedule($node->nid)) {
+				if($schedule_wrapper = entity_metadata_wrapper('node', $schedule)) {
+					$node->air_date = ($air_date = $schedule_wrapper->field_radio_air_date->value()) ? $air_date : false;
+					$node->early_release_date = ($early_release = $schedule_wrapper->field_release_date->value()) ? $early_release : false;
+				}
+
+				if ($node->air_date && ($node->air_date > $episode_wrapper->field_radio_air_date->value())) {
+					$node->rerun = true;
+				}
+			}
+			//  	- If no air_date set from schedule, set air_date from episode
+			if (!$node->air_date && $episode_wrapper && ($air_date = $episode_wrapper->field_radio_air_date->value())) {
+				$node->air_date = $air_date;
+			}
+
+			//  2. Set release timestamp
+			//		- derived from in logical order: schedule early release date, schedule air date, episode air date
+			//  3 Set RSS timestamp
+			//	4. Set all timestamps derived from release_timestamp
+			//  5. Set release_phase
+			$node->release_timestamp = ( $node->early_release_date ) ? $node->early_release_date : ( $node->air_date  ? $node->air_date : false );
+			foreach ($release_phases as $phase => $hours) {
+				$node->{$phase."_timestamp"} = ($node->release_timestamp) ? $node->release_timestamp + variable_get("tal_".$phase."_hours", $hours)*60*60 : false;
+				if ($node->{$phase."_timestamp"} && $node->{$phase."_timestamp"} < REQUEST_TIME) $node->release_phase = $phase;
+			}
+			$node->rss_timestamp = ($node->podcast_timestamp) ? $node->podcast_timestamp - (2*60*60) : false;
+
+			//  6. Determine if episode is live - after preview, yes.
+			if (($phase = $node->release_phase) && ($node->release_phase !== 'prerelease')) {
+				//  LIVE? -
+				$retracted = ($episode_wrapper && ($retracted = $episode_wrapper->field_retracted->value())) ? $retracted : false;
+				if (($phase !== 'preview') && !$retracted) $node->is_live = true;
+			}
+			//  7. Determine if episode is in feed
+			//		- if so, it cannot be in the archive release phase, set to extended
+			if ($node->is_live) {
+				if (in_array($node->nid, $feed)) $node->in_feed = true;
+				if ($node->in_feed && $node->release_phase == 'archive') {
+					$node->release_phase = 'extended';
+				}
+			}
+			//  8. Set audio_source_file and download_url
+			if ($node->is_live) {
+				//  Source file - use air date appropriate audio field, fallback to episode archive audio
+				$node->audio_source_file =
+          ($schedule_wrapper && isset($schedule_wrapper->{"field_audio_".$phase}) && ($file = $schedule_wrapper->{"field_audio_".$phase}->value())) ? $file :
+					( ($episode_wrapper && ($file = $episode_wrapper->field_audio_archive->value())) ? $file : false );
+
+				//  Download url - depends on release phase and current feed
+				//		Megaphone - in_feed and has megaphone url
+				//		Archive - all other cases regardless of release phase
+				if ($node->in_feed && ($schedule_wrapper) && ($megaphone_url = $schedule_wrapper->field_megaphone_episode_url->value())) {
+					$node->download_url = str_replace('https://', PODCAST_URL_PREFIX, $megaphone_url);
+				} else {
+					$node->download_url = ($file && $url = file_create_url($node->audio_source_file['uri'])) ? $url : false;
+				}
+			} else if ($node->release_phase == 'preview') {
+				$node->audio_source_file = $file = $episode_wrapper->{"field_audio_promo"}->value();
+				$node->download_url = ($file && $url = file_create_url($node->audio_source_file['uri'])) ? $url : false;
+			}
+		}
+	}
+}
+
+/**
+ * Implements hook_node_view.
+ *
+ *  - tv: Add extras.
+ *  - episode:
+ *    - view mode full: add beeped link, extras, related acts & collections.
+ *    - view mode homepage - add extras.
+ *    - view mode rss - rss elements including enclosure (url), pubdate, act descriptions, transcript link, subtitle, summary, explicit.
+ *  - act: add related, contributors.
+ *
+ * @param object $node
+ * @param string $view_mode
+ * @param string $langcode
+ * @return void
+ */
+function tal_episode_node_view($node, $view_mode, $langcode) {
+	if ($node->type == 'embed') {
+		global $conf;
+		$conf['x_frame_options'] = '';
+	}
+	if ($node->type == 'tv') {
+		if ($view_mode == 'full') {
+			if ($items = field_get_items('node', $node, 'field_extras')) {
+				foreach ($items as $item) {
+					$extra = (!empty($item['entity']) ? $item['entity'] : node_load($item['target_id']));
+					$more_important = false;
+					$hide = false;
+					if ($values = field_get_items('node', $extra, 'field_hide')) {
+						$hide = $values[0]['value'];
+					}
+					if ($importance = field_get_items('node', $extra, 'field_importance')) {
+						$more_important = $importance[0]['value'];
+					}
+					if (!$hide) {
+						if (!empty($more_important)) {
+							$node->content['extras_upper'][] = node_view($extra, 'episode');
+						}
+						else {
+							$node->content['extras_lower'][] = node_view($extra, 'episode');
+						}
+					}
+				}
+			}
+		}
+	}
+	if ($node->type == 'episode') {
+		if ($view_mode == 'full') {
+			if ($items = field_get_items('node', $node, 'field_audio_clean')) {
+				if ($node->is_live) {
+					$url = file_create_url($items[0]['uri']);
+					$find = url('sites/default/files/audio/upload', array('absolute' => true));
+					$replace = 'https://www.podtrac.com/pts/redirect.mp3/podcast.thisamericanlife.org';
+					// Remove CDN replacement for Pantheon
+					//$url = str_replace($find, $replace, $url);
+					if (!empty($node->content['field_notes'][0]['#markup'])) {
+						$body = $node->content['field_notes'][0]['#markup'];
+						if (preg_match_all('/<p>(.*)eeped\ version(.*)<\/p>/ui', $body, $matches, PREG_SET_ORDER)) {
+							foreach ($matches as $match) {
+								$body = str_replace($match[0], '', $body);
+							}
+						}
+						$render = array(
+							'#prefix' => '<p>',
+							'#suffix' => '</p>',
+							'#markup' => t('Note: The internet version of this episode contains un-beeped curse words. !link', array('!link' => l(t('BEEPED VERSION.'), $url))),
+						);
+						$body .= render($render);
+						$node->content['field_notes'][0]['#markup'] = $body;
+					}
+					else {
+						$node->content['clean_audio'] = array(
+							'#prefix' => '<p>',
+							'#suffix' => '</p>',
+							'#markup' => t('Note: The internet version of this episode contains un-beeped curse words. !link', array('!link' => l(t('BEEPED VERSION.'), $url))),
+						);
+					}
+				}
+			}
+			if ($items = field_get_items('node', $node, 'field_extras')) {
+				foreach ($items as $item) {
+					$extra = (!empty($item['entity']) ? $item['entity'] : node_load($item['target_id']));
+					$more_important = false;
+					$hide = false;
+					if ($values = field_get_items('node', $extra, 'field_hide')) {
+						$hide = $values[0]['value'];
+					}
+					if ($importance = field_get_items('node', $extra, 'field_importance')) {
+						$more_important = $importance[0]['value'];
+					}
+					if (!$hide) {
+						if (!empty($more_important)) {
+							$node->content['extras_upper'][] = node_view($extra, 'episode');
+						}
+						else {
+							$node->content['extras_lower'][] = node_view($extra, 'episode');
+						}
+					}
+				}
+			}
+
+			if (empty($_GET['app']) && $items = field_get_items('node', $node, 'field_acts')) {
+				$exclude = array();
+				$primary_tags = array();
+				$secondary_tags = array();
+				foreach ($items as $act_number => $item) {
+					$nid = $item['target_id'];
+					$exclude[$nid] = $nid;
+					if (count($primary_tags) < 3 && $act_number > 0 && $act = (!empty($item['entity']) ? $item['entity'] : node_load($nid))) {
+						if ($tags = field_get_items('node', $act, 'field_tags')) {
+							$k = array_rand($tags);
+							$tid = $tags[$k]['tid'];
+							$primary_tags[$tid] = $tid;
+							if (count($tags) > 1) {
+								foreach ($tags as $delta => $tag) {
+									$tid = $tag['tid'];
+									if (empty($primary_tags[$tid])) {
+										$secondary_tags[$tid] = $tid;
+									}
+								}
+							}
+						}
+					}
+				}
+				$primary_tags += $secondary_tags;
+				foreach ($primary_tags as $tid) {
+					$query = db_select('node', 'n');
+					$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+					$query->join('field_data_field_acts', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+					$query->join('taxonomy_index', 'ti', 'a.field_acts_target_id = ti.nid');
+					$query
+						->fields('a', array('field_acts_target_id'))
+						->condition('n.status', 1)
+						->condition('n.type', 'episode')
+						->condition('ti.tid', $tid)
+						->condition('a.delta', 0, '<>')
+						->condition('a.field_acts_target_id', $exclude, 'NOT IN')
+						->condition('rad.field_radio_air_date_value', date('c'), '<')
+						->orderRandom()
+						->range(0, 1);
+					if ($nid = $query->execute()->fetchField()) {
+						$exclude[$nid] = $nid;
+						if ($act = node_load($nid)) {
+							$node->content['related']['acts'][] = node_view($act, 'footer');
+						}
+					}
+					if (count($node->content['related']['acts']) >= 3) {
+						break;
+					}
+				}
+				$count = 0;
+				if (!empty($node->content['related']['acts'])) {
+					$count = count($node->content['related']['acts']);
+				}
+				if ($count < 3) {
+					$query = db_select('node', 'n');
+					$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+					$query->join('field_data_field_acts', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+					$query
+						->fields('a', array('field_acts_target_id'))
+						->condition('n.status', 1)
+						->condition('n.type', 'episode')
+						->condition('a.delta', 0, '<>')
+						->condition('a.field_acts_target_id', $exclude, 'NOT IN')
+						->condition('rad.field_radio_air_date_value', date('c'), '<')
+						->orderRandom()
+						->range(0, (3 - $count));
+					if ($nids = $query->execute()->fetchCol()) {
+						foreach ($nids as $nid) {
+							if ($act = node_load($nid)) {
+								$node->content['related']['acts'][] = node_view($act, 'footer');
+							}
+						}
+					}
+				}
+				if ($nid = variable_get('tal_episode_related_collection', false)) {
+					if ($collection = node_load($nid)) {
+						if ($collection->type == 'collection') {
+							$node->content['related']['collection']['title'] = array(
+								'#markup' => $collection->title,
+								'#prefix' => '<h2><span>',
+								'#suffix' => '</span></h2>',
+							);
+							$node->content['related']['collection']['description'] = array(
+								'#markup' => l(t('View all'), 'node/'.$collection->nid),
+								'#prefix' => '<div class="description">',
+								'#suffix' => '</div>',
+							);
+							$node->content['related']['collection']['nodes'] = array(
+								'#prefix' => '<div class="nodes">',
+								'#suffix' => '</div>',
+							);
+							$count = 0;
+							if ($items = field_get_items('node', $collection, 'field_recommendations')) {
+								shuffle($items);
+								foreach ($items as $item) {
+									if ($collection_item = field_collection_item_load($item['value'])) {
+										if ($episodes = field_get_items('field_collection_item', $collection_item, 'field_episodes')) {
+											foreach ($episodes as $item) {
+												if ($item['target_id'] != $node->nid && $episode = node_load($item['target_id'])) {
+													if ($episode->type == 'episode') {
+														$node->content['related']['collection']['nodes'][] = node_view($episode, 'recently');
+														$count++;
+														if ($count >= 2) {
+															break 2;
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if ($view_mode == 'homepage') {
+			if ($items = field_get_items('node', $node, 'field_extras')) {
+				foreach ($items as $item) {
+					$extra = (!empty($item['entity']) ? $item['entity'] : node_load($item['target_id']));
+					$more_important = false;
+					$hide = false;
+					if ($values = field_get_items('node', $extra, 'field_hide')) {
+						$hide = $values[0]['value'];
+					}
+					if ($importance = field_get_items('node', $extra, 'field_importance')) {
+						$more_important = $importance[0]['value'];
+					}
+					if (!$hide) {
+						if (!empty($more_important)) {
+							$node->content['extras'][] = node_view($extra, 'episode');
+						}
+						else {
+							$node->content['extras'][] = node_view($extra, 'episode');
+						}
+					}
+				}
+				if (!empty($node->content['extras'])) {
+					$node->content['extras']['#prefix'] = '<div class="extras">';
+					$node->content['extras']['#suffix'] = '</div>';
+				}
+			}
+		}
+		if ($view_mode == 'rss') {
+			$episode_number = false;
+			$title = array();
+			$youtube = (arg(1) == 'youtube.xml');
+
+			if ($items = field_get_items('node', $node, 'field_episode_number')) {
+				$episode_number = $items[0]['value'];
+				$node->rss_elements['itunes:episode'] = $episode_number;
+				$title[] = $items[0]['value'];
+			}
+			$node->rss_elements['itunes:title'] = $node->title;
+			$title[] = $node->title;
+			$youtube_title = "$node->title | This American Life | Episode $episode_number";
+			$node->title = ($youtube) ? $youtube_title : implode(': ', $title);
+
+			$node->rss_namespaces['xmlns:itunes'] = 'http://www.itunes.com/dtds/podcast-1.0.dtd';
+			$node->rss_elements['itunes:author'] = 'This American Life';
+
+			// explicit
+			if ($items = field_get_items('node', $node, 'field_explicit')) {
+				if (!empty($items[0]['value'])) {
+					$node->rss_elements['itunes:explicit'] = 'true';
+				} else {
+					$node->rss_elements['itunes:explicit'] = 'false';
+				}
+			}
+
+			// rss image
+			$items = (field_get_items('node', $node, 'field_rss_image')) ?: $items = field_get_items('node', $node, 'field_image');
+			$node->rss_elements[] = [
+				'key' => 'itunes:image',
+				'attributes' => [
+					'href' => image_style_url('rss_image', $items[0]['uri']),
+				]
+			];
+
+			if ($youtube) {
+				// youtube images
+				$items = field_get_items('node', $node, 'field_youtube_image');
+				$node->rss_elements[] = [
+					'key' => 'media:thumbnail',
+					'attributes' => [
+						'url' => file_create_url($items[0]['uri']),
+						'height' => 720,
+						'width' => 1280,
+					]
+				];
+			}
+
+			// enclosure
+			$url = $node->download_url;
+			if (
+				($youtube) &&
+				($podcast_url = file_create_url($node->audio_source_file['uri']))
+			) $url = $podcast_url;
+			if ($url) {
+				$node->rss_elements[] = array(
+					'key' => 'enclosure',
+					'attributes' => array(
+						'url' => $url,
+						'type' => 'audio/mpeg',
+					),
+				);
+			}
+
+			// duration
+			if ($duration = $node->audio_source_file['metadata']['duration']) {
+				$seconds = tal_time_to_seconds($duration);
+				if (true) $seconds += 120;
+				$node->rss_elements['itunes:duration'] = gmdate('H:i:s', $seconds);
+			}
+
+			// description - body and then promo copy
+			$body = $promo_copy = $youtube_body = '';
+			if ($items = field_get_items('node', $node, 'body')) {
+				if (!empty($items[0]['value'])) {
+					$body = $youtube_body = strip_tags($items[0]['safe_value']) . "\n";
+				}
+				if (!empty($items[0]['safe_summary'])) {
+					$node->rss_elements['itunes:subtitle'] = strip_tags($items[0]['safe_summary']);
+				}
+				else {
+					$node->rss_elements['itunes:subtitle'] = truncate_utf8($body, 255, true, true);
+				}
+			}
+			if ($items = field_get_items('node', $node, 'field_rss_promo_copy')) {
+				if (!empty($items[0]['value'])) {
+					$promo_copy = $items[0]['value'];
+					$promo_copy = "<p>$promo_copy</p>";
+				}
+			}
+			$summary = $body;
+
+			$body = '<p>'.$body.'</p>' . $promo_copy;
+
+			// Act descriptions for RSS feed
+			if ($acts = field_get_items('node', $node, 'field_acts')) {
+				$body .= '<ul>';
+				foreach ($acts as $item) {
+					if ($act = node_load($item['target_id'])) {
+						$nonact = false;
+						if ($items = field_get_items('node', $act, 'field_nonact')) {
+							$nonact = $items[0]['value'];
+						}
+						if (empty($nonact)) {
+							$act_body = '';
+							if ($names = field_get_items('node', $act, 'field_act_label')) {
+								$act_body .= $names[0]['value'].': ';
+							}
+							else if ($names = field_get_items('node', $act, 'field_act_number')) {
+								if (!empty($names[0]['value'])) {
+									$act_body .= t('Act !number', array('!number' => $names[0]['value'])).': ';
+								}
+							}
+							if ($act_body_items = field_get_items('node', $act, 'body')) {
+								$string = $act_body_items[0]['value'];
+								if ($matches = preg_split('/(\([\d\s\/]+\s+minutes?\))|<\/p>/', $string, -1, PREG_SPLIT_DELIM_CAPTURE)) {
+									$act_body .= html_entity_decode(strip_tags($matches[0].(substr($matches[1], 0, 1) == '(' ? $matches[1] : '')));
+								}
+							}
+							if ($items = field_get_items('node', $act, 'field_timestamp')) {
+								$act_timestamp = tal_seconds_to_timecode($items[0]['value']);
+							} else {
+								$act_timestamp = "00:00";
+							}
+						}
+					}
+					$youtube_body .= "$act_timestamp $act_body\n";
+					$summary .= "\n\n".$act_body;
+					$body .= '<li>'.$act_body.'</li>';
+				}
+				$body .= '</ul>';
+			}
+
+			$youtube_body .= "\nSubscribe to support the show, get bonus content, and access to our greatest hits archive: https://bit.ly/3QANCX4";
+
+			// Transcript link for RSS feed
+			$body .= '<p>Transcripts are available at ';
+			$youtube_body .= "\n\nEpisode transcript: ";
+			$query = db_select('node', 'n');
+			$query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+			$query
+				->fields('n', array('nid'))
+				->condition('e.field_episode_target_id', $node->nid)
+				->condition('n.status', 1)
+				->condition('n.type', 'transcript');
+			if ($nid = $query->execute()->fetchField()) {
+				$body .= l('thisamericanlife.org', 'node/'.$nid, array('absolute' => true));
+				$youtube_body .= url('node/'.$nid, ['absolute' => true]);
+			}
+			else {
+				$body .= l('thisamericanlife.org', '<front>', array('absolute' => true));
+				$youtube_body .= "https://thisamericanlife.org";
+			}
+
+			$body .= '</p>';
+
+			// Links for Megaphone privacy compliance
+			$body .= "<p><a href='https://www.thisamericanlife.org/page/privacy-policy'>This American Life privacy policy.</a><br />";
+			$body .= "<a href='https://podcastchoices.com/adchoices'>Learn more about sponsor message choices.</a>";
+			$body .= "</p>";
+
+			$node->rss_elements['itunes:summary'] = $summary;
+			foreach (element_children($node->content) as $key) {
+				if ($key == 'body') {
+					$node->content[$key] = array(
+						'#markup' => ($youtube) ? $youtube_body : $body,
+					);
+				}
+				else {
+					unset($node->content[$key]);
+				}
+			}
+
+		}
+
+	}
+	if ($node->type == 'act') {
+		if ($view_mode == 'full' || $view_mode == 'episode') {
+			if ($items = field_get_items('node', $node, 'field_extras')) {
+				foreach ($items as $delta => $item) {
+					$extra = (!empty($item['entity']) ? $item['entity'] : node_load($item['target_id']));
+					$hide = false;
+					if ($values = field_get_items('node', $extra, 'field_hide')) {
+						$hide = $values[0]['value'];
+					}
+					if ($hide) {
+						$node->content['field_extras'][$delta]['#access'] = false;
+					}
+				}
+			}
+		}
+		if (empty($_GET['app']) && $view_mode == 'full') {
+			if ($items = field_get_items('node', $node, 'field_tags')) {
+				if ($term = taxonomy_term_load($items[0]['tid'])) {
+					$node->content['related']['tag']['title'] = array(
+						'#markup' => t('More in !term', array('!term' => $term->name)),
+						'#prefix' => '<h2><span>',
+						'#suffix' => '</span></h2>',
+					);
+					$node->content['related']['tag']['description'] = array(
+						'#markup' => l(t('View all'), 'archive', array('query' => array('tag' => $term->tid))),
+						'#prefix' => '<div class="description">',
+						'#suffix' => '</div>',
+					);
+					$node->content['related']['tag']['nodes'] = array(
+						'#prefix' => '<div class="nodes">',
+						'#suffix' => '</div>',
+					);
+					$exclude = array($node->nid);
+					$query = db_select('node', 'n');
+					$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+					$query->join('field_data_field_acts', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+					$query->join('taxonomy_index', 'ti', 'a.field_acts_target_id = ti.nid');
+					$query
+						->fields('a', array('field_acts_target_id'))
+						->condition('n.status', 1)
+						->condition('n.type', 'episode')
+						->condition('ti.tid', $term->tid)
+						->condition('a.delta', 0, '<>')
+						->condition('a.field_acts_target_id', $node->nid, '<>')
+						->condition('rad.field_radio_air_date_value', date('c'), '<')
+						->orderBy('rad.field_radio_air_date_value', 'DESC')
+						->range(0, 3);
+					if ($nids = $query->execute()->fetchCol()) {
+						$nodes = node_load_multiple($nids);
+						$node->content['related']['tag']['nodes']['acts'] = node_view_multiple($nodes, 'footer');
+					}
+				}
+			}
+			if ($items = field_get_items('node', $node, 'field_contributor')) {
+				if ($term = (!empty($items[0]['entity']) ? $items[0]['entity'] : taxonomy_term_load($items[0]['target_id']))) {
+					$node->content['related']['contributor']['title'] = array(
+						'#markup' => t('More by !term', array('!term' => $term->name)),
+						'#prefix' => '<h2><span>',
+						'#suffix' => '</span></h2>',
+					);
+					$node->content['related']['contributor']['description'] = array(
+						'#markup' => l(t('View all'), 'archive', array('query' => array('contributor' => $term->tid))),
+						'#prefix' => '<div class="description">',
+						'#suffix' => '</div>',
+					);
+					$node->content['related']['contributor']['nodes'] = array(
+						'#prefix' => '<div class="nodes">',
+						'#suffix' => '</div>',
+					);
+					$exclude = array($node->nid);
+					$query = db_select('node', 'n');
+					$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+					$query->join('field_data_field_acts', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+					$query->join('taxonomy_index', 'ti', 'a.field_acts_target_id = ti.nid');
+					$query
+						->fields('a', array('field_acts_target_id'))
+						->condition('n.status', 1)
+						->condition('n.type', 'episode')
+						->condition('ti.tid', $term->tid)
+						->condition('a.delta', 0, '<>')
+						->condition('a.field_acts_target_id', $node->nid, '<>')
+						->condition('rad.field_radio_air_date_value', date('c'), '<')
+						->orderBy('rad.field_radio_air_date_value', 'DESC')
+						->range(0, 3);
+					if ($nids = $query->execute()->fetchCol()) {
+						$nodes = node_load_multiple($nids);
+						$node->content['related']['contributor']['nodes']['acts'] = node_view_multiple($nodes, 'footer');
+					}
+				}
+			}
+			if (empty($node->content['related']['contributor']['nodes']['acts'])) {
+				unset($node->content['related']['contributor']);
+				if ($nid = variable_get('tal_episode_related_collection', false)) {
+					if ($collection = node_load($nid)) {
+						if ($collection->type == 'collection') {
+							$node->content['related']['collection']['title'] = array(
+								'#markup' => $collection->title,
+								'#prefix' => '<h2><span>',
+								'#suffix' => '</span></h2>',
+							);
+							$node->content['related']['collection']['description'] = array(
+								'#markup' => l(t('View all'), 'node/'.$collection->nid),
+								'#prefix' => '<div class="description">',
+								'#suffix' => '</div>',
+							);
+							$node->content['related']['collection']['nodes'] = array(
+								'#prefix' => '<div class="nodes">',
+								'#suffix' => '</div>',
+							);
+							$count = 0;
+							if ($items = field_get_items('node', $collection, 'field_recommendations')) {
+								shuffle($items);
+								foreach ($items as $item) {
+									if ($collection_item = field_collection_item_load($item['value'])) {
+										if ($episodes = field_get_items('field_collection_item', $collection_item, 'field_episodes')) {
+											foreach ($episodes as $item) {
+												if ($item['target_id'] != $node->nid && $episode = node_load($item['target_id'])) {
+													if ($episode->type == 'episode') {
+														$node->content['related']['collection']['nodes'][] = node_view($episode, 'recently');
+														$count++;
+														if ($count >= 2) {
+															break 2;
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+		}
+	}
+}
+
+function tal_episode_taxonomy_term_view($term, $view_mode, $langcode) {
+	if ($term->vocabulary_machine_name == 'series') {
+		$query = db_select('node', 'n');
+		$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND entity_type ='node' AND deleted = 0)");
+		$query->join('taxonomy_index', 'ti', 'n.nid = ti.nid');
+		$query
+			->fields('n', array('nid'))
+			->condition('ti.tid', $term->tid)
+			->condition('n.type', 'episode')
+			->condition('rad.field_radio_air_date_value', date('c'), '<=')
+			->orderBy('rad.field_radio_air_date_value', 'ASC');
+		if ($node = menu_get_object()) {
+			if ($node->type == 'episode') {
+				$query->condition('n.nid', $node->nid, '<>');
+			}
+			elseif ($node->type == 'homepage') {
+				// TODO
+				$query = db_select('node', 'n');
+				$query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND entity_type ='node' AND deleted = 0)");
+				$query
+					->fields('n', array('nid'))
+					->condition('n.type', array('episode'))
+					->condition('rad.field_radio_air_date_value', date('c'), '<')
+					->orderBy('rad.field_radio_air_date_value', 'DESC')
+					->range(0,1);
+				if ($nid = $query->execute()->fetchField()) {
+					$query->condition('n.nid', $nid, '<>');
+				}
+			}
+		}
+		if ($nids = $query->execute()->fetchCol()) {
+			$nodes = node_load_multiple($nids);
+			$term->content['episodes'] = node_view_multiple($nodes, 'series');
+		}
+	}
+}
+
+/**
+ * Implements hook_entity_info_alter().
+ */
+function tal_episode_entity_info_alter(&$entity_info) {
+	$entity_info['node']['view modes']['episode'] = array(
+		'label' => t('Episode'),
+		'custom settings' => FALSE,
+	);
+	$entity_info['node']['view modes']['act'] = array(
+		'label' => t('Act'),
+		'custom settings' => FALSE,
+	);
+};
+
+function tal_episode_inline_entity_form_table_fields_alter(&$fields, $context) {
+	if ($context['parent_entity_type'] == 'node' && $context['parent_bundle'] == 'episode' && $context['field_name'] == 'field_acts') {
+		$fields['field_act_label'] = array(
+			'type' => 'field',
+			'label' => t('Label'),
+			'weight' => -1,
+		);
+		unset($fields['status']);
+	}
+}
+
+function tal_episode_inline_entity_form_entity_form_alter(&$entity_form, &$form_state) {
+	if ($entity_form['#entity_type'] == 'node' && $entity_form['#parents'][0] == 'field_acts') {
+		$node = $entity_form['#entity'];
+		if ($node->type == 'act' && empty($node->nid)) {
+			if ($episode = $form_state['node']) {
+				if (!empty($episode->nid)) {
+					$entity_form['field_episode'][LANGUAGE_NONE]['#default_value'][$episode->nid] = $episode->nid;
+				}
+			}
+			$act_number = 0;
+			if (!empty($form_state['input']['field_acts'][LANGUAGE_NONE]['entities'])) {
+				$act_number = count($form_state['input']['field_acts'][LANGUAGE_NONE]['entities']);
+				$entity_form['field_act_label'][LANGUAGE_NONE][0]['value']['#default_value'] = t('Act !number', array('!number' => $act_number));
+				/*
+				$list1 = array('', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen');
+				if (!empty($list1[$act_number])) {
+					$entity_form['field_act_label'][LANGUAGE_NONE][0]['value']['#default_value'] = t('Act !number', array('!number' => ucwords($list1[$act_number])));
+				}
+				*/
+			}
+			else {
+				$entity_form['title']['#default_value'] = t('Prologue');
+			}
+			$entity_form['field_act_number'][LANGUAGE_NONE][0]['value']['#default_value'] = $act_number;
+		}
+	}
+
+	if ($entity_form['#entity_type'] == 'taxonomy_term' && $entity_form['#parents'][0] == 'field_contributor') {
+		$entity_form['description']['#title'] = t('Short Bio');
+	}
+}
+
+function tal_episode_form_taxonomy_form_term_alter(&$form, &$form_state) {
+	if ($vocabulary = $form['#vocabulary']) {
+		if ($vocabulary->machine_name == 'contributor') {
+			$form['description']['#title'] = t('Short Bio');
+		}
+	}
+}
+
+/**
+ * Implements hook_node_validate.
+ *
+ * @see https://api.drupal.org/api/drupal/modules--node--node.api.php/function/hook_node_validate/7.x
+ *
+ * @param object $node
+ * @param array $form
+ * @param array $form_state
+ * @return void
+ */
+function tal_episode_node_validate($node, $form, &$form_state) {
+	if ($node->type == 'schedule') {
+		if (
+			!($node->nid)
+			&& ($wrapper = entity_metadata_wrapper('node', $node))
+			) {
+				// Prevent from saving if there is already a schedule node with the same episode air date
+				$air_date = date('Y-m-d',$wrapper->field_radio_air_date->value()) . "T00:00:00";
+				$query = "select n.nid from node n
+				left join field_data_field_radio_air_date rad on (rad.entity_id=n.nid and rad.entity_type ='node' and rad.deleted = 0)
+				where n.type = 'schedule'
+				and rad.field_radio_air_date_value = '$air_date'";
+				$rows = db_query($query)->fetchAll();
+				if (count($rows) > 0) {
+					$dupe_nid = array_shift($rows);
+					$dupe = node_load($dupe_nid->nid);
+					form_set_error('time', t("Air Date must be unique. <a href='/node/$dupe->nid/edit'>$dupe->title</a> is set to air at this date."));
+				}
+		}
+	}
+}
+
+/**
+ * Implements hook_node_presave.
+ *
+ *  EPISODE:
+ *    - reset stream
+ *  ACT:
+ *    - convert audio time format to unix timestamp for saving timestamps
+ *    - set url alias according to parent episode
+ *  SCHEDULE:
+ *    - set stream for reencode
+ *    - set title according to referred episode
+ *    - create or update associated megaphone episode
+ *  TV:
+ *    - set title according to rseason and episode number
+ *  TV_ACT:
+ *    - set title according to parent episode
+ *
+ * @see https://api.drupal.org/api/drupal/modules%21node%21node.api.php/function/hook_node_presave/7.x
+ *
+ * @param [type] $node
+ * @return void
+ */
+function tal_episode_node_presave($node) {
+	$original = isset($node->original) ? $node->original : null;
+
+	if ($node->type == 'episode') {
+
+		if (empty($node->field_audio_archive[LANGUAGE_NONE][0]['fid']) ||
+		empty($original->field_audio_archive[LANGUAGE_NONE][0]['fid']) ||
+		$node->field_audio_archive[LANGUAGE_NONE][0]['fid'] != $original->field_audio_archive[LANGUAGE_NONE][0]['fid']) {
+			db_delete('tal_stream_archive')->condition('nid', $node->nid)->execute();
+			$node->field_stream_archive[LANGUAGE_NONE] = array();
+		}
+	}
+
+	if ($node->type == 'act') {
+
+		//tal_time_to_seconds
+		foreach (array('field_timestamp_podcast', 'field_timestamp_extended', 'field_timestamp', 'field_timestamp_dovetail') as $field) {
+			if (isset($node->{$field}[LANGUAGE_NONE][0]['value'])) {
+				$node->{$field}[LANGUAGE_NONE][0]['value'] = tal_time_to_seconds($node->{$field}[LANGUAGE_NONE][0]['value']);
+			}
+		}
+
+		if ($items = field_get_items('node', $node, 'field_episode')) {
+			$item = $items[0];
+			$path = array();
+
+			if ($episode_path = drupal_get_path_alias('node/'.$item['target_id'])) {
+				$path[] = $episode_path;
+				$label = $node->title;
+				if ($items = field_get_items('node', $node, 'field_act_label')) {
+					$label = $items[0]['value'];
+				}
+				$path[] = str_replace('_', '-', transliteration_clean_filename($label));
+				$new_path = implode('/', $path);
+				$count = 0;
+				while (db_query("SELECT COUNT(*) FROM {url_alias} WHERE pid != :pid AND alias = :alias", array(':pid' => (isset($node->path['pid']) ? $node->path['pid'] : 0), ':alias' => $new_path))->fetchField() > 0) {
+					$new_path = implode('/', $path).'-'.$count;
+					$count++;
+				}
+				$node->path['alias'] = $new_path;
+			}
+		}
+	}
+
+	if ($node->type == 'schedule') {
+		// Ensure manually created Episode Air Dates are at 8pm ET
+		$date = new DateTime($node->field_radio_air_date[LANGUAGE_NONE][0]['value']);
+		$node->field_radio_air_date[LANGUAGE_NONE][0]['value'] = $date->format('Y-m-d\T') . "20:00:00";
+
+		// Send changes to Megaphone - see includes/megaphone.functions.inc
+		tal_episode_megaphone_node_presave($node);
+	}
+
+	if ($node->type == 'tv') {
+		if ($items = field_get_items('node', $node, 'field_episode_number')) {
+			$path = array();
+			$episode_number = t('E').$items[0]['value'];
+			if ($items = field_get_items('node', $node, 'field_season_number')) {
+				$episode_number = t('S').$items[0]['value'].$episode_number;
+			}
+			$path[] = transliteration_clean_filename($episode_number);
+			$path[] = str_replace('_', '-', transliteration_clean_filename($node->title));
+			$new_path = implode('/', $path);
+			$count = 0;
+			while (db_query("SELECT COUNT(*) FROM {url_alias} WHERE pid != :pid AND alias = :alias", array(':pid' => (isset($node->path['pid']) ? $node->path['pid'] : 0), ':alias' => $new_path))->fetchField() > 0) {
+				$new_path = implode('/', $path).'-'.$count;
+				$count++;
+			}
+			$node->path['alias'] = $new_path;
+		}
+	}
+
+	if ($node->type == 'tv_act') {
+		if ($items = field_get_items('node', $node, 'field_tv_episode')) {
+			$item = $items[0];
+			$path = array();
+			if ($episode_path = drupal_get_path_alias('node/'.$item['target_id'])) {
+				$path[] = $episode_path;
+				$label = $node->title;
+				if ($items = field_get_items('node', $node, 'field_act_label')) {
+					$label = $items[0]['value'];
+				}
+				$path[] = str_replace('_', '-', transliteration_clean_filename($label));
+				$new_path = implode('/', $path);
+				$count = 0;
+				while (db_query("SELECT COUNT(*) FROM {url_alias} WHERE pid != :pid AND alias = :alias", array(':pid' => (isset($node->path['pid']) ? $node->path['pid'] : 0), ':alias' => $new_path))->fetchField() > 0) {
+					$new_path = implode('/', $path).'-'.$count;
+					$count++;
+				}
+				$node->path['alias'] = $new_path;
+			}
+		}
+	}
+
+}
+
+/**
+ * Implements hook_node_insert.
+ *
+ * @param object $node
+ * @return void
+ */
+function tal_episode_node_insert($node) {
+	if ($node->type == 'schedule') {
+		// Send changes to Megaphone - see includes/megaphone.functions.inc
+		tal_episode_megaphone_node_insert($node);
+	}
+}
+
+/**
+ *  Implements hook_node_update.
+ *
+ *  - Enforce episode audio file name conventions.
+ *  - Update Megaphone episodes when audio files change.
+ *
+ * @see https://api.drupal.org/api/drupal/modules!node!node.api.php/function/hook_node_update/7.x
+ *
+ * @param object $node
+ * @return void
+ */
+function tal_episode_node_update($node) {
+	$original = $node->original;
+	$wrapper = entity_metadata_wrapper('node', $node);
+	$original_wrapper = entity_metadata_wrapper('node', $original);
+
+	if ($node->type == 'schedule') {
+
+		$episode = (isset($wrapper->field_episode)) ? $wrapper->field_episode->value() : null;
+		$episode_number = ($episode) ? $episode->field_episode_number[LANGUAGE_NONE][0]['value'] : null;
+		$megaphone_release = (isset($episode) && in_array($episode->release_phase, ['extended','archive'])) ? 'extended' : 'podcast';
+
+		// Maintain audio filename conventions: "[ep #]-[phase]-[timestamp].mp3"
+		foreach ([
+			'podcast' => "/$episode_number-podcast-[0-9]{9,18}\.mp3/",
+			'extended' => "/$episode_number-extended-[0-9]{9,18}\.mp3/",
+			'clean' => "/\/$episode_number\.mp3/"
+		] as $fieldName => $pattern) {
+			if (
+				isset($episode_number) &&
+				($file = $wrapper->{"field_audio_$fieldName"}->value()) &&
+				($originalfile = $original_wrapper->{"field_audio_$fieldName"}->value()) &&
+				(
+					($file['fid'] !== $originalfile['fid']) ||//				new file
+					(preg_match($pattern, $originalfile['uri']) === 0)//		incorrect name
+				)
+			) {
+
+				//  Rename/Move
+				$filename = ($fieldName == 'clean') ? $episode_number : "$episode_number-$fieldName-".REQUEST_TIME;
+				tal_episode_audio_upload_rename($file['fid'], $filename);
+
+				//  Upload files to Megaphone
+				if (
+					(
+						($episode->in_feed) ||
+						($episode->podcast_timestamp > REQUEST_TIME)
+					) &&
+					($megaphone_release == $fieldName)
+				) {
+					tal_episode_megaphone_initiate_upload($node, $fieldName);
+				}
+			}
+		}
+	}
+
+	if ($node->type == 'episode') {
+		if ($episode_number = $wrapper->field_episode_number->value()) {
+
+			// Promo: "[ep #].mp3"
+			if ($promo = $wrapper->field_audio_promo->value()) {
+				tal_episode_audio_upload_rename($promo['fid'], $episode_number);
+			}
+
+			// Archive: "audio/[random-key]/[ep #].mp3"
+			if (
+				($archive = $wrapper->field_audio_archive->value()) &&
+				($archive_original = $original_wrapper->field_audio_archive->value())
+			) {
+				$new_file = file_load($archive['fid']);
+				$old_file = file_load($archive_original['fid']);
+				if ($new_file->fid !== $old_file->fid) {
+					$path = 'public://audio/'.$episode_number.'/'.drupal_random_key();
+					tal_episode_audio_upload_rename($archive['fid'], $episode_number, $path);
+				}
+			}
+
+		}
+
+		if (!empty($node->timestamps)) {
+			foreach ($node->timestamps as $nid => $fields) {
+				if ($act = node_load($nid, null, true)) {
+					$dirty = false;
+					foreach ($fields as $field => $value) {
+						if (!empty($value) && (empty($act->{$field}[LANGUAGE_NONE][0]['value']) || $act->{$field}[LANGUAGE_NONE][0]['value'] != $value)) {
+							$value = tal_time_to_seconds($value);
+							$dirty = true;
+							$act->{$field}[LANGUAGE_NONE][0]['value'] = $value;
+						}
+					}
+					if ($dirty) {
+						node_save($act);
+					}
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Implements hook_node_delete.
+ *
+ *    Remove simplecast episodes attached to episode node.
+ *    Remove megaphone episode attached to schedule node.
+ *
+ * @see https://api.drupal.org/api/drupal/modules!node!node.api.php/function/hook_node_delete/7.x
+ *
+ * @param object $node
+ * @return void
+ */
+function tal_episode_node_delete($node) {
+	/*  On Episode Air Date delete:  delete Megaphone Episode  */
+	if ($node->type == 'schedule') {
+		if ($items = field_get_items('node', $node, 'field_megaphone_episode_id')) {
+			$episode_id = $items[0]['value'];
+			$api = new MegaRestClient();
+			$api->episodeDelete($episode_id);
+		}
+	}
+}
+
+/**
+ * Rename an uploaded audio file.
+ *
+ * @param int $fid
+ * @param string $filename
+ * @return void
+ */
+function tal_episode_audio_upload_rename( $fid, string $filename, string $path = null ) {
+	//  Attempt to move file
+	$new_file = file_load($fid);
+	$parts = pathinfo($new_file->uri);
+	$path = (isset($path) && file_prepare_directory($path, FILE_CREATE_DIRECTORY)) ? $path : $parts['dirname'];
+	$new_url = $path.'/'.$filename.'.'.$parts['extension'];
+	if ($new_file->uri != $new_url) {
+		$new_file = file_move($new_file, $new_url, FILE_EXISTS_REPLACE);
+	}
+
+	//  Log and return outcome
+	$op = (isset($new_file)) ? (($new_file) ? "moved" : "move failure") : "already exists";
+	watchdog('tal_episode_audio_upload_rename', "File $op: $new_url");
+	return $new_file;
+}
+
+/**
+ * Implements hook_FORMID_form_alter.
+ *
+ */
+function tal_episode_form_node_form_alter(&$form, &$form_state, $form_id) {
+  //  Hide import_id on all node edit forms
+	if (!empty($form['field_import_id'])) {
+		$form['field_import_id']['#access'] = false;
+	}
+
+}
+
+/**
+ * Implements hook_FORMID_form_alter.
+ *
+ *    EPISODE Edit Form
+ *      - Image defaults
+ *      - Get timestamps and add to Acts tab
+ *      - Hide/disable retired fields
+ *
+ */
+function tal_episode_form_episode_node_form_alter(&$form, &$form_state, $form_id) {
+  global $user;
+  if (!empty($form['#node'])) {
+    $node = $form['#node'];
+    $episode_wrapper = entity_metadata_wrapper('node', $form['#node']);
+
+    $fields = array('field_image');
+    foreach ($fields as $field) {
+      if (!empty($form[$field][LANGUAGE_NONE][0]['#default_value'])) {
+        $form[$field][LANGUAGE_NONE][0]['#description'] = l(t('Original Image'), file_create_url($form[$field][LANGUAGE_NONE][0]['#default_value']['uri']));
+      }
+    }
+
+    if (!empty($form['field_image_layout'])) {
+      if ($form['field_image_layout'][LANGUAGE_NONE]['#default_value'][0] != 'auto') {
+        unset($form['field_image_layout'][LANGUAGE_NONE]['#options']['auto']);
+      }
+    }
+
+    //  Get timestamps and add to Acts tab
+    if ($acts = $episode_wrapper->field_acts->value()) {
+      $rows = [ '#tree' => true ];
+      $fields = [ 'field_timestamp' => t('Archive') ];
+      foreach ($acts as $act) {
+        $row = [ 'label' => [ '#markup' => tal_episode_act_name($act) ] ];
+        foreach ($fields as $field => $title) {
+          $default_value = null;
+          if ($times = field_get_items('node', $act, $field)) $default_value = gmdate('H:i:s', $times[0]['value']);
+          $row[$field] = [
+            '#type' => 'textfield',
+            '#title' => $title,
+            '#title_display' => 'invisible',
+            '#size' => 7,
+            '#maxlength' => 8,
+            '#default_value' => $default_value,
+          ];
+        }
+        $rows[$act->nid] = $row;
+      }
+      $header = array(
+        t('Timestamps'),
+        l(t('Archive Episode'), 'node/'.$node->nid, array('query' => array('audio' => 'archive'), 'attributes' => array('target' => '_blank'))),
+      );
+      $form['timestamps'] = array(
+        '#theme' => 'tal_episode_timestamp_table',
+        '#header' => $header,
+        'timestamps' => $rows,
+        '#weight' => 99,
+      );
+      $form['#group_children']['timestamps'] = 'group_acts';
+    }
+
+    //  Disable all retired fields
+    foreach ($form['#group_children'] as $field => $group) {
+      if ( ($group == 'group_retired') || ($group == 'group_dovetail') || ($group == 'group_simplecast') ) $form[$field]['#disabled'] = true;
+    }
+    //  Hide Retired from non-admin users
+    if ( !in_array('sysadmin', $user->roles) && !in_array('admin', $user->roles) ) {
+      $form['#groups']['group_retired']->access = false;
+      $form['#groups']['group_retired']->disabled = true;
+    }
+  }
+
+}
+
+/**
+ * Implements hook_FORMID_form_alter.
+ *
+ *    ACT Edit Form
+ *      - Hide/disable old timestamp fields
+ *
+ */
+function tal_episode_form_act_node_form_alter(&$form, &$form_state, $form_id) {
+	global $user;
+  //  Hide Retired from non-admin users
+  if ( !in_array('sysadmin', $user->roles) ) {
+    $form['field_timestamp_podcast']['#access'] = false;
+	  $form['field_timestamp_extended']['#access'] = false;
+  }
+
+  //tal_time_to_seconds
+	foreach (array('field_timestamp_podcast', 'field_timestamp_extended', 'field_timestamp', 'field_timestamp_dovetail') as $field) {
+		if (!empty($form[$field][LANGUAGE_NONE][0]['value']['#default_value'])) {
+			$form[$field][LANGUAGE_NONE][0]['value']['#default_value'] = gmdate('H:i:s', $form[$field][LANGUAGE_NONE][0]['value']['#default_value']);
+			unset($form[$field][LANGUAGE_NONE][0]['value']['#element_validate']);
+		}
+	}
+}
+
+/**
+ * Implements hook_FORMID_form_alter.
+ *
+ *    SCHEDULE Edit Form
+ *
+ */
+function tal_episode_form_schedule_node_form_alter(&$form, &$form_state, $form_id) {
+	tal_episode_megaphone_form_schedule_node_form_alter($form, $form_state, $form_id);
+}
+
+
+function tal_episode_browse_form($form, &$form_state) {
+	if (apachesolr_has_searched('solr')) {
+		$current_query = apachesolr_current_query('solr');
+		$searcher = $current_query->getSearcher();
+		$response = apachesolr_static_response_cache($searcher);
+	}
+	$filter_count = array();
+	$form['#attributes']['class'][] = 'clearfix';
+	$defaults = array();
+	$form['keyword'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Search Term'),
+		'#title_display' => 'invisible',
+		'#attributes' => array(
+			'placeholder' => t('Search term')
+		),
+	);
+	if (!empty($_GET['keyword'])) {
+		$form['keyword']['#default_value'] = filter_xss($_GET['keyword'], array());
+		$params = drupal_get_query_parameters($_GET, array('q', 'keyword'));
+		$form['keyword']['#field_suffix'] = l('<span class="icon-x"></span>', 'archive', array('html' => true, 'query' => $params, 'attributes' => array('class' => array('clear'))));
+	}
+
+	// Content Type
+	$options = array(
+		'episodes' => t('Episodes'),
+		'videos' => t('Videos'),
+		'extras' => t('Extras'),
+		'tv' => t('TV Show'),
+	);
+	$inner = array();
+	if (!empty($response->facet_counts->facet_fields)) {
+		foreach ($options as $k => $v) {
+			if (empty($response->facet_counts->facet_fields->ss_type->$k)) {
+				unset($options[$k]);
+			}
+		}
+	}
+	$filter_count['type'] = count($options);
+	$inner['count'] = array(
+		'#markup' => count($options),
+		'#prefix' => '<div class="count">&nbsp;(',
+		'#suffix' => ')</div>',
+	);
+	$inner['selection'] = array(
+		'#markup' => '',
+		'#prefix' => '<div class="selection">: <span class="value">',
+		'#suffix' => '</span><span class="icon-x"></span></div>',
+	);
+	$wrapper_attributes = array(
+		'data-target' => 'browse-type',
+		'class' => array(
+			'browse-type',
+			'form-wrapper-select',
+			'form-wrapper-type',
+		)
+	);
+	$form['type'] = array(
+		'#type' => 'select',
+		'#title' => t('Content Type'),
+		'#options' => array('0' => t('Content Type')) + $options,
+		'#prefix' => '<div'.drupal_attributes($wrapper_attributes).'>',
+		'#suffix' => '</div>',
+	);
+	$params = drupal_get_query_parameters($_GET, array('q', 'type'));
+	if (!empty($_GET['type'])) {
+		$default = $_GET['type'];
+		$form['type']['#default_value'] = $default;
+		if (!empty($options[$default])) {
+			$form['#attributes']['class']['filtered'] = 'filtered';
+			$defaults['type'] = $options[$default];
+			$inner['selection'] = array(
+				'#markup' => $options[$default],
+				'#prefix' => '<div class="selection">: <span class="value">',
+				'#suffix' => '</span><span class="icon-x"></span></div>',
+			);
+			$wrapper_attributes['class'][] = 'selected';
+		}
+	}
+	$form['type']['#prefix'] ='<div'.drupal_attributes($wrapper_attributes).'>';
+	$form['type']['#title'] .= render($inner);
+	$items = array();
+	foreach ($options as $key => $value) {
+		$params['type'] = $key;
+		$items[] = l($value, 'archive', array('query' => $params, 'attributes' => array('class' => array('ignore'), 'data-key' => $key, 'data-value' => $value, 'data-element' => 'form-item-type')));
+	}
+	$form['type_list'] = array(
+		'#theme' => 'item_list',
+		'#items' => $items,
+	);
+
+	// Tag
+	if ($vocabulary = taxonomy_vocabulary_machine_name_load('tags')) {
+		$options = array();
+		$items = array();
+		$meta = array();
+		$query = db_select('taxonomy_term_data', 'td');
+		$query
+			->fields('td', array('tid', 'name'))
+			->condition('td.vid', $vocabulary->vid)
+			->orderBy('td.name', 'ASC');
+		if (!empty($response->facet_counts->facet_fields)) {
+			$tids = array();
+			$field = 'im_vid_'.$vocabulary->vid;
+			foreach ($response->facet_counts->facet_fields->{$field} as $tid => $count) {
+				$tids[$tid] = $tid;
+			}
+			if (!empty($_GET['tag']) && is_numeric($_GET['tag'])) {
+				$tid = $_GET['tag'];
+				$tids[$tid] = $tid;
+			}
+			if (count($tids) > 0) {
+				$query->condition('td.tid', $tids);
+			}
+		}
+		if (!isset($tids) || count($tids) > 0) {
+			$result = $query->execute();
+			foreach ($result as $row) {
+				$options[$row->tid] = $row->name;
+				$letter = substr($row->name, 0, 1);
+				$title = $letter;
+				if (is_numeric($letter)) {
+					$title = '#';
+					$letter = 'number';
+				}
+				$params['tag'] = $row->tid;
+				if (empty($items[$letter])) {
+					$id = drupal_html_class('tag '.$letter);
+					$meta[$letter] = l($title, '', array('external' => true, 'fragment' => $id, 'attributes' => array('class' => array('ignore'))));
+					$items[$letter] = array(
+						'data' => '<h4>'.$title.'</h4>',
+						'id' => $id,
+					);
+				}
+				$items[$letter]['children'][] = l($row->name, 'archive', array('query' => $params, 'attributes' => array('class' => array('ignore'), 'data-key' => $row->tid, 'data-value' => $row->name, 'data-element' => 'form-item-tag')));
+			}
+		}
+		$form['tag_list'] = array(
+			'#theme' => 'item_list',
+			'#items' => $items,
+			'#attributes' => array('class' => array('alpha')),
+		);
+		$form['tag_meta'] = array(
+			'#theme' => 'item_list',
+			'#items' => $meta,
+			'#attributes' => array('class' => array('alpha-nav')),
+		);
+		$inner = array();
+		$filter_count['tag'] = count($options);
+		$inner['count'] = array(
+			'#markup' => count($options),
+			'#prefix' => '<div class="count">&nbsp;(',
+			'#suffix' => ')</div>',
+		);
+		$inner['selection'] = array(
+			'#markup' => '',
+			'#prefix' => '<div class="selection">: <span class="value">',
+			'#suffix' => '</span><span class="icon-x"></span></div>',
+		);
+		$wrapper_attributes = array(
+			'data-target' => 'browse-tag',
+			'class' => array(
+				'browse-tag',
+				'form-wrapper-select',
+				'form-wrapper-tag',
+			)
+		);
+		$form['tag'] = array(
+			'#type' => 'select',
+			'#title' => t('Tag'),
+			'#options' => array('0' => t('Tag')) + $options,
+			'#prefix' => '<div'.drupal_attributes($wrapper_attributes).'>',
+			'#suffix' => '</div>',
+		);
+		$params = drupal_get_query_parameters($_GET, array('q', 'tag'));
+		if (!empty($_GET['tag'])) {
+			$default = $_GET['tag'];
+			$form['tag']['#default_value'] = $default;
+			if (!empty($options[$default])) {
+				$form['#attributes']['class']['filtered'] = 'filtered';
+				$defaults['tag'] = $options[$default];
+				$inner['selection'] = array(
+					'#markup' => $options[$default],
+					'#prefix' => '<div class="selection">: <span class="value">',
+					'#suffix' => '</span><span class="icon-x"></span></div>',
+				);
+				$wrapper_attributes['class'][] = 'selected';
+			}
+		}
+		$form['tag']['#prefix'] ='<div'.drupal_attributes($wrapper_attributes).'>';
+		$form['tag']['#title'] .= render($inner);
+	}
+
+	// Contributor
+	if ($vocabulary = taxonomy_vocabulary_machine_name_load('contributor')) {
+		$options = array();
+		$items = array();
+		$meta = array();
+		$query = db_select('taxonomy_term_data', 'td');
+		$query->join('field_data_field_last_name', 'ln', "(ln.entity_id = td.tid AND ln.entity_type ='taxonomy_term' AND ln.deleted = 0)");
+		$query->leftJoin('field_data_field_first_name', 'fn', "(fn.entity_id = td.tid AND fn.entity_type ='taxonomy_term' AND fn.deleted = 0)");
+		$query
+			->fields('td', array('tid', 'name'))
+			->fields('ln', array('field_last_name_value'))
+			->condition('td.vid', $vocabulary->vid)
+			->orderBy('ln.field_last_name_value', 'ASC')
+			->orderBy('fn.field_first_name_value', 'ASC');
+		if (!empty($response->facet_counts->facet_fields)) {
+			$tids = array();
+			foreach ($response->facet_counts->facet_fields->sm_field_contributor as $tid => $count) {
+				$tids[$tid] = str_replace('taxonomy_term:', '', $tid);
+			}
+			if (!empty($_GET['contributor']) && is_numeric($_GET['contributor'])) {
+				$tid = $_GET['contributor'];
+				$tids[$tid] = $tid;
+			}
+			if (count($tids) > 0) {
+				$query->condition('td.tid', $tids);
+			}
+		}
+		if (!isset($tids) || count($tids) > 0) {
+			$result = $query->execute();
+			foreach ($result as $row) {
+				$options[$row->tid] = $row->name;
+				$letter = substr($row->field_last_name_value, 0, 1);
+				$title = $letter;
+				if (is_numeric($letter)) {
+					$title = '#';
+					$letter = 'number';
+				}
+				$params['contributor'] = $row->tid;
+				if (empty($items[$letter])) {
+					$id = drupal_html_class('contributor '.$letter);
+					$meta[$letter] = l($title, '', array('external' => true, 'fragment' => $id, 'attributes' => array('class' => array('ignore'))));
+					$items[$letter] = array(
+						'data' => '<h4>'.$title.'</h4>',
+						'id' => $id,
+					);
+				}
+				$items[$letter]['children'][] = l($row->name, 'archive', array('query' => $params, 'attributes' => array('class' => array('ignore'), 'data-key' => $row->tid, 'data-value' => $row->name, 'data-element' => 'form-item-contributor')));
+			}
+		}
+		$form['contributor_list'] = array(
+			'#theme' => 'item_list',
+			'#items' => $items,
+			'#attributes' => array('class' => array('alpha')),
+		);
+		$form['contributor_meta'] = array(
+			'#theme' => 'item_list',
+			'#items' => $meta,
+			'#attributes' => array('class' => array('alpha-nav')),
+		);
+		$inner = array();
+		$filter_count['contributor'] = count($options);
+		$inner['count'] = array(
+			'#markup' => count($options),
+			'#prefix' => '<div class="count">&nbsp;(',
+			'#suffix' => ')</div>',
+		);
+		$inner['selection'] = array(
+			'#markup' => '',
+			'#prefix' => '<div class="selection">: <span class="value">',
+			'#suffix' => '</span><span class="icon-x"></span></div>',
+		);
+		$wrapper_attributes = array(
+			'data-target' => 'browse-contributor',
+			'class' => array(
+				'browse-contributor',
+				'form-wrapper-select',
+				'form-wrapper-contributor',
+			)
+		);
+		$form['contributor'] = array(
+			'#type' => 'select',
+			'#title' => t('Contributor'),
+			'#options' => array('0' => t('Contributor')) + $options,
+			'#prefix' => '<div'.drupal_attributes($wrapper_attributes).'>',
+			'#suffix' => '</div>',
+		);
+		$params = drupal_get_query_parameters($_GET, array('q', 'contributor'));
+		if (!empty($_GET['contributor'])) {
+			$default = $_GET['contributor'];
+			$form['contributor']['#default_value'] = $default;
+			if (!empty($options[$default])) {
+				$form['#attributes']['class']['filtered'] = 'filtered';
+				$defaults['contributor'] = $options[$default];
+				$inner['selection'] = array(
+					'#markup' => $options[$default],
+					'#prefix' => '<div class="selection">: <span class="value">',
+					'#suffix' => '</span><span class="icon-x"></span></div>',
+				);
+				$wrapper_attributes['class'][] = 'selected';
+			}
+		}
+		$form['contributor']['#prefix'] ='<div'.drupal_attributes($wrapper_attributes).'>';
+		$form['contributor']['#title'] .= render($inner);
+	}
+
+	// Years
+	$options = array();
+	for ($i = date('Y'); $i >= 1995; $i--) {
+		$options[$i] = $i;
+	}
+	$inner = array();
+	if (!empty($response->facet_counts->facet_fields)) {
+		foreach ($options as $k => $v) {
+			if (empty($response->facet_counts->facet_fields->is_year->$k)) {
+				unset($options[$k]);
+			}
+		}
+	}
+	$filter_count['year'] = count($options);
+	$inner['count'] = array(
+		'#markup' => count($options),
+		'#prefix' => '<div class="count">&nbsp;(',
+		'#suffix' => ')</div>',
+	);
+	$inner['selection'] = array(
+		'#markup' => '',
+		'#prefix' => '<div class="selection">: <span class="value">',
+		'#suffix' => '</span><span class="icon-x"></span></div>',
+	);
+	$wrapper_attributes = array(
+		'data-target' => 'browse-year',
+		'class' => array(
+			'browse-year',
+			'form-wrapper-select',
+			'form-wrapper-year',
+		)
+	);
+	$form['year'] = array(
+		'#type' => 'select',
+		'#title' => t('Year'),
+		'#options' => array('0' => t('Year')) + $options,
+		'#prefix' => '<div'.drupal_attributes($wrapper_attributes).'>',
+		'#suffix' => '</div>',
+	);
+	$params = drupal_get_query_parameters($_GET, array('q', 'year'));
+	if (!empty($_GET['year'])) {
+		$default = $_GET['year'];
+		$form['year']['#default_value'] = $default;
+		if (!empty($options[$default])) {
+			$form['#attributes']['class']['filtered'] = 'filtered';
+			$defaults['year'] = $options[$default];
+			$inner['selection'] = array(
+				'#markup' => $options[$default],
+				'#prefix' => '<div class="selection">: <span class="value">',
+				'#suffix' => '</span><span class="icon-x"></span></div>',
+			);
+			$wrapper_attributes['class'][] = 'selected';
+		}
+	}
+	$form['year']['#prefix'] ='<div'.drupal_attributes($wrapper_attributes).'>';
+	$form['year']['#title'] .= render($inner);
+	$items = array();
+	foreach ($options as $key => $value) {
+		$params['year'] = $key;
+		$items[] = l($value, 'archive', array('query' => $params, 'attributes' => array('class' => array('ignore'), 'data-key' => $key, 'data-value' => $value, 'data-element' => 'form-item-year')));
+	}
+	$form['year_list'] = array(
+		'#theme' => 'item_list',
+		'#items' => $items,
+	);
+
+	// Options
+	$filters = array(
+		'type' => t('Content Type'),
+		'tag' => t('Tag'),
+		'contributor' => t('Contributor'),
+		'year' => t('Year'),
+	);
+	$items = array();
+	foreach ($filters as $key => $value) {
+		$inner = array();
+		$inner['title'] = array(
+			'#markup' => $value,
+			'#prefix' => '<h4>',
+			'#suffix' => '</h4>',
+		);
+		$inner['count'] = array(
+			'#markup' => (!empty($filter_count[$key]) ? $filter_count[$key] : '0'),
+			'#prefix' => '<div class="count">&nbsp;(',
+			'#suffix' => ')</div>',
+		);
+		$inner['selection'] = array(
+			'#markup' => (!empty($defaults[$key]) ? $defaults[$key] : ''),
+			'#prefix' => '<div class="selection">: <span class="value">',
+			'#suffix' => '</span><span class="icon-x"></span></div><span class="icon-arrow-right"></span>',
+		);
+		$classes = array('ignore', 'modal', drupal_html_class('browse '.$key));
+		if (!empty($defaults[$key])) {
+			$classes[] = 'selected';
+		}
+		$params = array(
+			'external' => true,
+			'html' => true,
+			'fragment' => drupal_html_class('browse '.$key),
+			'attributes' => array(
+				'class' => $classes,
+				'data-element' => drupal_html_class('form wrapper '.$key),
+			),
+		);
+		$items[] = l(render($inner), '', $params);
+	}
+	$form['options'] = array(
+		'#theme' => 'item_list',
+		'#items' => $items,
+	);
+
+	$form['buttons']['clear'] = array(
+		'#prefix' => '<div class="form-button">',
+		'#suffix' => '</div>',
+		'#markup' => l(t('Clear'), current_path(), array('attributes' => array('clear', 'ignore'))),
+	);
+	$form['buttons']['submit'] = array(
+		'#prefix' => '<div class="form-button">',
+		'#suffix' => '</div>',
+		'#type' => 'submit',
+		'#value' => t('Apply'),
+	);
+	return $form;
+}
+
+function tal_episode_browse_form_submit(&$form, &$form_state) {
+	$values = $form_state['values'];
+	$params = drupal_get_query_parameters($_GET, array('q', 'keyword', 'type', 'tag', 'contributor', 'year'));
+	if (!empty($values['keyword'])) {
+		$keyword = filter_xss($values['keyword'], array());
+		if (is_numeric($keyword) && $episode = tal_episode_number_load($keyword)) {
+			if (tal_is_ajax()) {
+				$data = array(
+					'redirect' => url('node/'.$episode->nid),
+				);
+				drupal_json_output($data);
+				drupal_exit();
+			}
+			else {
+				$form_state['redirect'] = 'node/'.$episode->nid;
+			}
+			return;
+		}
+		else {
+			$params['keyword'] = $keyword;
+		}
+	}
+	if (!empty($values['type'])) {
+		$params['type'] = $values['type'];
+	}
+	if (!empty($values['tag'])) {
+		$params['tag'] = $values['tag'];
+	}
+	if (!empty($values['contributor'])) {
+		$params['contributor'] = $values['contributor'];
+	}
+	if (!empty($values['year'])) {
+		$params['year'] = $values['year'];
+	}
+	if (tal_is_ajax()) {
+		$data = array(
+			'redirect' => url('archive', array('query' => $params)),
+		);
+		drupal_json_output($data);
+		drupal_exit();
+	}
+	else {
+		$form_state['redirect'] = array('archive', array('query' => $params));
+	}
+}
+
+function template_process_tal_episode_video(&$variables) {
+	$node = $variables['node'];
+	$variables['classes_array'][] = 'episode-image';
+	if ($items = field_get_items('node', $node, 'field_hero_video')) {
+		$file = (object) $items[0];
+		$variables['video'] = file_create_url($file->uri);
+		$caption = array();
+		// Caption
+		if ($items = field_get_items('file', $file, 'field_caption')) {
+			if (!empty($items[0]['value'])) {
+				$variables['caption']['caption'] = array(
+					'#markup' => check_markup($items[0]['value'], 'simple'),
+				);
+			}
+		}
+		if ($items = field_get_items('file', $file, 'field_credit')) {
+			if (!empty($items[0]['value'])) {
+				$variables['caption']['credit'] = array(
+					'#prefix' => '<div class="credit">',
+					'#suffix' => '</div>',
+					'#markup' => check_markup($items[0]['value'], 'simple'),
+				);
+			}
+		}
+		if ($items = field_get_items('node', $node, 'field_image_layout')) {
+			$landscape = false;
+			$uncropped = false;
+			switch ($items[0]['value']) {
+				case 'auto':
+				if ($info = image_get_info($file->uri)) {
+					if ($info['width'] > $info['height']) {
+						$landscape = true;
+						$variables['classes_array'][] = 'landscape';
+					}
+					else {
+						$variables['classes_array'][] = 'portrait';
+						$variables['image']['#style_name'] = 'portrait';
+					}
+				}
+				break;
+
+				case 'special':
+				$variables['classes_array'][] = 'special';
+				break;
+
+				case 'portrait':
+				$variables['classes_array'][] = 'portrait';
+				$variables['image']['#style_name'] = 'portrait';
+				break;
+
+				case 'full':
+				$landscape = true;
+				$variables['classes_array'][] = 'full';
+				break;
+
+				case 'uncropped':
+				$landscape = true;
+				$uncropped = true;
+				$variables['image']['#style_name'] = 'uncropped';
+				$variables['classes_array'][] = 'landscape';
+				break;
+
+				case 'landscape':
+				$landscape = true;
+				$variables['classes_array'][] = 'landscape';
+				break;
+
+				case 'tile':
+				$variables['classes_array'][] = 'tile';
+				$variables['classes_array'][] = 'clearfix';
+				$variables['image'] = array();
+				for ($i = 1; $i <= 4; $i++) {
+					$variables['image'][] = array(
+						'#theme' => 'image_style',
+						'#style_name' => 'square',
+						'#path' => $file->uri,
+						'#alt' => $alt,
+						'#attributes' => array(
+							'class' => array(
+								'image-'.$i,
+							),
+						),
+					);
+				}
+				break;
+			}
+			if ($landscape && $items = field_get_items('node', $node, 'field_mobile_image')) {
+				$variables['classes_array'][] = 'shifter';
+				$mobile_file = (object) $items[0];
+				$variables['image'] = array(
+					'#markup' => '<div class="image"></div>',
+				);
+				$variables['mobile_image_url'] = image_style_url('portrait', $mobile_file->uri);
+				if ($uncropped) {
+					$variables['image_url'] = image_style_url('uncropped', $file->uri);
+					$uri = image_style_path('uncropped', $file->uri);
+					if ($info = image_get_info($uri)) {
+						$variables['image_padding'] = $info['height'] / $info['width'] * 100;
+					}
+				}
+				else {
+					$variables['image_url'] = image_style_url('landscape', $file->uri);
+				}
+			}
+		}
+	}
+}
+
+function template_process_tal_episode_image(&$variables) {
+	$node = $variables['node'];
+	$variables['classes_array'][] = 'episode-image';
+	if ($items = field_get_items('node', $node, 'field_image')) {
+		$file = (object) $items[0];
+		$caption = array();
+		$alt = '';
+		// Caption
+		if ($items = field_get_items('file', $file, 'field_caption')) {
+			if (!empty($items[0]['value'])) {
+				$variables['caption']['caption'] = array(
+					'#markup' => check_markup($items[0]['value'], 'simple'),
+				);
+			}
+		}
+		if ($items = field_get_items('file', $file, 'field_credit')) {
+			if (!empty($items[0]['value'])) {
+				$variables['caption']['credit'] = array(
+					'#prefix' => '<div class="credit">',
+					'#suffix' => '</div>',
+					'#markup' => check_markup($items[0]['value'], 'simple'),
+				);
+			}
+		}
+
+		if ($items = field_get_items('file', $file, 'field_file_image_alt_text')) {
+			$alt = strip_tags($items[0]['safe_value']);
+		}
+		$style_name = 'landscape';
+		if ($node->type == 'act') {
+			$style_name = 'column';
+		}
+		$variables['image'] = array(
+			'#theme' => 'image_style',
+			'#style_name' => $style_name,
+			'#path' => $file->uri,
+			'#alt' => $alt,
+		);
+		if ($items = field_get_items('node', $node, 'field_image_layout')) {
+			$landscape = false;
+			$uncropped = false;
+			switch ($items[0]['value']) {
+				case 'auto':
+				if ($info = image_get_info($file->uri)) {
+					if ($info['width'] > $info['height']) {
+						$landscape = true;
+						$variables['classes_array'][] = 'landscape';
+					}
+					else {
+						$variables['classes_array'][] = 'portrait';
+						$variables['image']['#style_name'] = 'portrait';
+					}
+				}
+				break;
+
+				case 'special':
+				$variables['classes_array'][] = 'special';
+				break;
+
+				case 'portrait':
+        $info = image_get_info($file->uri);
+        $variables['classes_array'][] = 'portrait';
+        $variables['image']['#style_name'] = ($info['width'] >= 1200) ? 'large_portrait' : 'portrait';
+				break;
+
+				case 'full':
+				$landscape = true;
+				$variables['classes_array'][] = 'full';
+				break;
+
+				case 'uncropped':
+				$landscape = true;
+				$uncropped = true;
+				$variables['image']['#style_name'] = 'uncropped';
+				$variables['classes_array'][] = 'landscape';
+				break;
+
+				case 'landscape':
+				$landscape = true;
+				$variables['classes_array'][] = 'landscape';
+				break;
+
+				case 'tile':
+				$variables['classes_array'][] = 'tile';
+				$variables['classes_array'][] = 'clearfix';
+				$variables['image'] = array();
+				for ($i = 1; $i <= 4; $i++) {
+					$variables['image'][] = array(
+						'#theme' => 'image_style',
+						'#style_name' => 'square',
+						'#path' => $file->uri,
+						'#alt' => $alt,
+						'#attributes' => array(
+							'class' => array(
+								'image-'.$i,
+							),
+						),
+					);
+				}
+				break;
+			}
+			if ($landscape && $items = field_get_items('node', $node, 'field_mobile_image')) {
+				$variables['classes_array'][] = 'shifter';
+				$mobile_file = (object) $items[0];
+				$variables['image'] = array(
+					'#markup' => '<div class="image"></div>',
+				);
+				$variables['mobile_image_url'] = image_style_url('portrait', $mobile_file->uri);
+				if ($uncropped) {
+					$variables['image_url'] = image_style_url('uncropped', $file->uri);
+					$uri = image_style_path('uncropped', $file->uri);
+					if ($info = image_get_info($uri)) {
+						$variables['image_padding'] = $info['height'] / $info['width'] * 100;
+					}
+				}
+				else {
+					$variables['image_url'] = image_style_url('landscape', $file->uri);
+				}
+			}
+		}
+	}
+}
+
+/**
+* Implementation of hook_theme().
+*/
+function tal_episode_theme($existing, $type, $theme, $path) {
+	return array(
+		'tal_episode_browse_form' => array(
+			'render element' => 'form',
+			'template' => 'tal-episode-browse-form',
+			'path' => $path.'/templates',
+		),
+		'tal_episode_timestamp_table' => array(
+			'render element' => 'form',
+		),
+		'tal_episode_image' => array(
+			'variables' => array('node' => null, 'link' => false),
+			'template' => 'tal-episode-image',
+			'path' => $path.'/templates',
+		),
+		'tal_episode_video' => array(
+			'variables' => array('node' => null, 'link' => false),
+			'template' => 'tal-episode-video',
+			'path' => $path.'/templates',
+		),
+		'tal_episode_megaphone_node_form' => array(
+			'render element' => 'form',
+			'template' => 'tal-mega-node-form',
+			'path' => $path.'/templates',
+		),
+	);
+}
+
+function theme_tal_episode_timestamp_table(&$variables) {
+	$form = $variables['form'];
+	$rows = $form['timestamps'];
+	$header = $form['#header'];
+
+	$content = array(
+		'#theme' => 'table',
+		'#header' => $header,
+		'#rows' => array(),
+	);
+
+	foreach (element_children($rows) as $nid) {
+		$row = array();
+		foreach (element_children($rows[$nid]) as $field) {
+			$row[] = drupal_render($rows[$nid][$field]);
+		}
+		$content['#rows'][] = $row;
+	}
+
+	return drupal_render($content);
+}
+
+function tal_episode_block_info() {
+	 $blocks = array();
+	 $blocks['browse'] = array(
+		 'info' => t('Browse Archive'),
+		 'status' => 1,
+		 'region' => 'top',
+		 'visibility' => BLOCK_VISIBILITY_LISTED,
+		 'pages' => "archive",
+	 );
+	 return $blocks;
+ }
+
+ function tal_episode_block_view($delta = '') {
+	 $block = array();
+
+	 switch ($delta) {
+		 case 'browse':
+		 $block['subject'] = t('Browse our archive by');
+		 $block['content']['form'] = drupal_get_form('tal_episode_browse_form');
+		 break;
+
+	 }
+	 return $block;
+ }

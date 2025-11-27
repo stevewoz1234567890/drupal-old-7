@@ -1,0 +1,137 @@
+<?php
+/**
+ * @file
+ * Code for the About feature.
+ */
+
+include_once 'tal_about.features.inc';
+
+/**
+* Implementation of hook_menu().
+*/
+function tal_about_menu() {
+  $items = array();
+
+  $items['about/announcements'] = array(
+    'page callback' => 'tal_about_announcements_page',
+    'access arguments' => array('access content'),
+    'title' => 'Announcements',
+    'file' => 'tal_about.pages.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['about/staff'] = array(
+    'page callback' => 'tal_about_staff_page',
+    'access arguments' => array('access content'),
+    'title' => 'Staff',
+    'file' => 'tal_about.pages.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['tal/cron/events'] = array(
+    'page callback' => 'tal_about_import_events',
+    'access arguments' => array('access content'),
+    'file' => 'tal_about.pages.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+function tal_about_form_staff_node_form_alter(&$form, &$form_state, $form_id) {
+  $form['title']['#access'] = false;
+}
+
+function tal_about_node_presave($node) {
+  if ($node->type == 'staff') {
+    $name = array();
+    if ($items = field_get_items('node', $node, 'field_first_name')) {
+      $name[] = $items[0]['value'];
+    }
+    if ($items = field_get_items('node', $node, 'field_last_name')) {
+      $name[] = $items[0]['value'];
+    }
+    $node->title = implode(' ', $name);
+  }
+}
+
+/**
+* Implements hook_entity_info_alter().
+*/
+function tal_about_entity_info_alter(&$entity_info) {
+  $entity_info['node']['view modes']['about'] = array(
+    'label' => t('About'),
+    'custom settings' => FALSE,
+  );
+}
+
+function tal_about_taxonomy_term_view($term, $view_mode, $langcode) {
+  if ($term->vocabulary_machine_name == 'events') {
+    $query = db_select('node', 'n');
+    $query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND entity_type ='node' AND deleted = 0)");
+    $query->join('taxonomy_index', 'ti', 'n.nid = ti.nid');
+    $query
+      ->fields('n', array('nid'))
+      ->condition('ti.tid', $term->tid)
+      ->condition('n.type', 'event')
+      ->condition('rad.field_radio_air_date_value', date('c'), '>=')
+      ->orderBy('rad.field_radio_air_date_value', 'ASC');
+    if ($nids = $query->execute()->fetchCol()) {
+      $nodes = node_load_multiple($nids);
+      $term->content['events'] = node_view_multiple($nodes, 'teaser');
+    }
+  }
+}
+
+function tal_about_block_info() {
+   $blocks = array();
+   $blocks['menu'] = array(
+     'info' => t('About Menu'),
+     'cache' => DRUPAL_CACHE_PER_PAGE,
+     'status' => 1,
+     'region' => 'sidebar_first',
+     'visibility' => BLOCK_VISIBILITY_LISTED,
+     'pages' => "about*",
+   );
+   return $blocks;
+ }
+
+ function tal_about_block_view($delta = '') {
+   $block = array();
+
+   switch ($delta) {
+     case 'menu':
+     $menu = 'main-menu';
+     $path = drupal_get_normal_path('about');
+     $trail = menu_get_active_trail();
+     if ($parent = $trail[1]) {
+       $depth = $parent['depth'] + 1;
+       $parameters = array(
+         'active_trail' => array($parent['plid']),
+         'only_active_trail' => true,
+         'min_depth' => $depth,
+         'max_depth' => $depth,
+         'expanded' => array($parent['mlid']),
+       );
+       if ($children = menu_build_tree($menu, $parameters)) {
+         $block['subject'] = t('About');
+         $items = array();
+         foreach ($children as $child) {
+           $link = $child['link'];
+           $attributes = array();
+           if ($link['link_path'] == current_path()) {
+             $block['subject'] = $link['link_title'];
+           }
+           $items[] = l($link['link_title'], $link['link_path']);
+         }
+         $block['content']['menu'] = array(
+           '#theme' => 'item_list',
+           '#items' => $items,
+         );
+       }
+     }
+     break;
+
+   }
+   return $block;
+ }

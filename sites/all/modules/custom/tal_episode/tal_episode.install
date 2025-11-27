@@ -1,0 +1,491 @@
+<?php
+
+/**
+ * Move archive audio to more hidden location
+ */
+function tal_episode_update_7002() {
+	$query = db_select('node', 'n');
+	$query->join('field_data_field_pandora_archive', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+	$query->join('file_managed', 'fm', "a.field_audio_archive_fid = fm.fid");
+	$query
+	  ->fields('n', array('nid'))
+	  ->fields('fm', array('fid', 'filename', 'uri'))
+	  ->condition('n.type', 'episode')
+	  ->orderBy('n.nid', 'ASC');
+	$result = $query->execute();
+	foreach ($result as $row) {
+		if (preg_match('/\/audio\/(\d+)\/(\d+)\.mp3/', $row->uri, $match)) {
+			$episode_number = $match[1];
+			$new_file = file_load($row->fid);
+			$parts = pathinfo($new_file->uri);
+			$path = 'public://audio/'.$episode_number.'/'.drupal_random_key();
+			file_prepare_directory($path, FILE_CREATE_DIRECTORY);
+			$new_url = $path.'/'.$episode_number.'.'.$parts['extension'];
+			if ($new_file = file_move($new_file, $new_url, FILE_EXISTS_REPLACE)) {
+				watchdog('tal_episode', t('Archive audio relocated for %episode_number.'), array('%episode_number' => $episode_number));
+			}
+		}
+	}
+}
+
+/**
+ * Move archive and Pandora audio to new NYT field
+ */
+function tal_episode_update_7006() {
+	$query = db_select('node', 'n');
+  $query->join('field_data_field_audio_pandora', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+  $query->leftJoin('field_data_field_audio_nyt', 'an', "(an.entity_id = n.nid AND an.entity_type ='node' AND an.deleted = 0)");
+  $query->join('file_managed', 'fm', "a.field_audio_pandora_fid = fm.fid");
+  $query
+	->fields('n', array('nid'))
+	->fields('fm', array('fid', 'filename', 'uri'))
+	->isNull('an.entity_id')
+	->condition('n.type', 'episode')
+	->orderBy('n.nid', 'ASC');
+  $result = $query->execute();
+  foreach ($result as $row) {
+	$node = node_load($row->nid);
+	if ($items = field_get_items('node', $node, 'field_episode_number')) {
+	  $episode_number = $items[0]['value'];
+	  $old_file = file_load($row->fid);
+	  if (file_exists($old_file->uri)) {
+		$parts = pathinfo($old_file->uri);
+		$path = 'public://audio/upload/nyt';
+		file_prepare_directory($path, FILE_CREATE_DIRECTORY);
+		$new_url = $path.'/'.$episode_number.'.'.$parts['extension'];
+		if ($new_file = file_copy($old_file, $new_url, FILE_EXISTS_REPLACE)) {
+		  $node->field_audio_nyt[LANGUAGE_NONE][0] = array(
+			'fid' => $new_file->fid,
+			'display' => true,
+		  );
+		  node_save($node);
+		  watchdog('tal_episode', t('Pandora audio copied to NYT for %episode_number.'), array('%episode_number' => $episode_number));
+		}
+	  }
+	}
+  }
+
+  $query = db_select('node', 'n');
+  $query->join('field_data_field_audio_archive', 'a', "(a.entity_id = n.nid AND a.entity_type ='node' AND a.deleted = 0)");
+  $query->leftJoin('field_data_field_audio_nyt', 'an', "(an.entity_id = n.nid AND an.entity_type ='node' AND an.deleted = 0)");
+  $query->join('field_data_field_episode_number', 'en', "(en.entity_id = n.nid AND en.entity_type ='node' AND en.deleted = 0)");
+  $query->join('file_managed', 'fm', "a.field_audio_archive_fid = fm.fid");
+  $query
+	->fields('n', array('nid'))
+	->fields('fm', array('fid', 'filename', 'uri'))
+	->isNull('an.entity_id')
+	->condition('n.type', 'episode')
+	->condition('en.field_episode_number_value', 709, '>=')
+	->orderBy('n.nid', 'ASC');
+  $result = $query->execute();
+  foreach ($result as $row) {
+	$node = node_load($row->nid);
+	if ($items = field_get_items('node', $node, 'field_episode_number')) {
+	  $episode_number = $items[0]['value'];
+	  $old_file = file_load($row->fid);
+	  if (file_exists($old_file->uri)) {
+		$parts = pathinfo($old_file->uri);
+		$path = 'public://audio/upload/nyt';
+		file_prepare_directory($path, FILE_CREATE_DIRECTORY);
+		$new_url = $path.'/'.$episode_number.'.'.$parts['extension'];
+		if ($new_file = file_copy($old_file, $new_url, FILE_EXISTS_REPLACE)) {
+		  $node->field_audio_nyt[LANGUAGE_NONE][0] = array(
+			'fid' => $new_file->fid,
+			'display' => true,
+		  );
+		  node_save($node);
+		  watchdog('tal_episode', t('Archive audio copied to NYT for %episode_number.'), array('%episode_number' => $episode_number));
+		}
+	  }
+	}
+  }
+}
+
+function tal_episode_schema() {
+  $schema['tal_stream_podcast'] = array(
+    'fields' => array(
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'stream' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array(
+      'nid',
+    ),
+  );
+	$schema['tal_stream_extended'] = array(
+		'fields' => array(
+			'nid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+			),
+			'stream' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => '',
+			),
+		),
+		'primary key' => array(
+			'nid',
+		),
+	);
+	$schema['tal_stream_archive'] = array(
+		'fields' => array(
+			'nid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+			),
+			'stream' => array(
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => '',
+			),
+		),
+		'primary key' => array(
+			'nid',
+		),
+	);
+	$schema['tal_megaphone_log'] = array(
+		'fields' => array(
+			'nid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+			),
+			'timestamp' => array(
+				'type' => 'int',
+				'not null' => TRUE,
+				'default' => 0,
+			),
+			'mid' => array(
+				'type' => 'varchar',
+				'length' => 64,
+				'not null' => TRUE,
+				'default' => '',
+			),
+			'operation' => array(
+				'type' => 'varchar',
+				'length' => 12,
+				'not null' => TRUE,
+				'default' => '',
+			),
+			'request' => array(
+				'type' => 'varchar',
+				'length' => 256,
+				'not null' => TRUE,
+				'default' => '',
+			),
+			'response' => array(
+				'type' => 'varchar',
+				'length' => 64,
+				'not null' => TRUE,
+				'default' => '',
+			),
+		),
+		'primary key' => array(
+			'nid', 'mid', 'operation', 'timestamp',
+		),
+	);
+  return $schema;
+}
+
+/**
+ * Create episode stream tables.
+ */
+function tal_episode_update_7007() {
+  $schema = tal_episode_schema();
+  db_create_table('tal_stream_podcast', $schema['tal_stream_podcast']);
+	db_create_table('tal_stream_extended', $schema['tal_stream_extended']);
+	db_create_table('tal_stream_archive', $schema['tal_stream_archive']);
+}
+
+/**
+ * Migrate stream data to new tables.
+ */
+function tal_episode_update_7011() {
+	$field_names = ['podcast', 'extended', 'archive'];
+	foreach ($field_names as $field_name) {
+		$query = db_select('field_data_field_stream_'.$field_name, 's');
+		$query->fields('s', array('entity_id', 'field_stream_'.$field_name.'_value'));
+		$result = $query->execute();
+		foreach ($result as $row) {
+			$record = [
+				'nid' => $row->entity_id,
+				'stream' => $row->{'field_stream_'.$field_name.'_value'},
+			];
+			drupal_write_record('tal_stream_'.$field_name, $record);
+		}
+	}
+}
+
+/**
+ * Add new table tal_megaphone_log.
+ *
+ */
+function tal_episode_update_7012() {
+	$schema['tal_megaphone_log'] = array(
+		'fields' => array(
+			'nid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+			),
+			'timestamp' => array(
+				'type' => 'int',
+				'not null' => TRUE,
+				'default' => 0,
+			),
+			'mid' => array(
+				'type' => 'varchar',
+				'length' => 64,
+				'not null' => TRUE,
+				'default' => '',
+			),
+			'operation' => array(
+				'type' => 'varchar',
+				'length' => 64,
+				'not null' => TRUE,
+				'default' => '',
+			),
+			'request' => array(
+				'type' => 'varchar',
+				'length' => 256,
+				'not null' => TRUE,
+				'default' => '',
+			),
+			'response' => array(
+				'type' => 'varchar',
+				'length' => 64,
+				'not null' => TRUE,
+				'default' => '',
+			),
+		),
+		'primary key' => array(
+			'nid', 'mid', 'operation', 'timestamp',
+		),
+	);
+	db_create_table('tal_megaphone_log', $schema['tal_megaphone_log']);
+}
+
+/**
+ * Delete {system} records for lost modules.
+ * Refer: https://www.drupal.org/node/2487215
+ */
+function tal_episode_update_7013(&$sandbox) {
+  $modules = array(
+    'backup_migrate',
+    'cdn',
+    'googleanalytics',
+    'varnish',
+  );
+  db_delete('system')
+	->condition('name', $modules, 'IN')
+	->condition('type', 'module')
+	->execute();
+}
+
+/**
+ * Migrate megaphone urls from simplecast field on episoded nodes to megaphone url field on schedule nodes.
+ *
+ * @return void
+ */
+function tal_episode_update_7014() {
+	echo "\n\nmigrating megaphone url values from episodes to schedules.\n\n";
+
+	// load all episode nodes with megaphone values and their associated schedules
+	$query = "select n.nid, s.field_simplecast_value
+	from node n
+	join field_data_field_simplecast s on (s.entity_id=n.nid and s.entity_type='node' and s.deleted=0)
+	where n.type='episode'
+	and n.status = 1
+	and s.field_simplecast_value like '%megaphone%'
+	order by nid desc";
+	$res = db_query($query)->fetchAllKeyed();
+
+	//  Process each episode and corresponding schedule
+	foreach ($res as $nid => $url) {
+		if (
+			($episode = node_load($nid)) &&
+			($episode_wrapper = entity_metadata_wrapper('node', $episode)) &&
+			($schedule = tal_episode_get_latest_episode_schedule($nid)) &&
+			($schedule_wrapper = entity_metadata_wrapper('node', $schedule))
+		){
+
+			$episode_number = $episode_wrapper->field_episode_number->value();
+			$current_url = $schedule_wrapper->field_megaphone_episode_url->value();
+
+			$wdmsg = $msg = "$episode->title ($episode_number).  -- ";
+			echo "Processing: $msg -- current url: $current_url, new url: $url\n";
+
+			//  make sure
+			if ($current_url !== $url) {
+				$schedule_wrapper->field_megaphone_episode_url->set($url);
+				$schedule_wrapper->field_do_not_sync->set(true);
+				$schedule_wrapper->save();
+				$wdmsg .= $msg =  "imported: $url\n";
+				echo $msg;
+			} else {
+				$wdmsg .= $msg =  "skipped.\n";
+				echo $msg;
+			}
+		}
+		watchdog('tal_episode', "Megaphone field migration: node :nid. Result: :wdmsg", [":nid" => $nid, ":wdmsg" => $wdmsg], WATCHDOG_NOTICE);
+	}
+}
+
+/**
+ * Migrate audio fields from episode nodes to schedule nodes.
+ *
+ * @return void
+ */
+function tal_episode_update_7015() {
+	echo "\n\nMigrating audio file field values and field_midroll values from episode to schedule nodes.\n\n";
+	$audio_fields = [
+		'field_audio_podcast' => 'podcast',
+		'field_audio_extended' => 'extended',
+		'field_audio_clean' => 'clean',
+	];
+	//  Get podcast episodes
+	$pnids = tal_episode_podcast_episodes();
+	$latest = array_values($pnids);
+	$latest = $latest[0];
+	$latest_schedule = tal_episode_get_latest_episode_schedule($latest);
+	// get newer scheduled episodes
+	$query = "select n.nid, e.field_episode_target_id
+	from node n
+	join field_data_field_episode e on (n.nid=e.entity_id and e.entity_type='node' and e.deleted=0)
+	where n.type='schedule'
+	and n.status = 1
+	and e.entity_id > $latest_schedule->nid
+	order by n.nid desc";
+	$res = db_query($query)->fetchAllKeyed();
+	foreach ($res as $nid => $enid) {
+		$newnid = (int) $enid;
+		$pnids[$newnid] = $newnid;
+	}
+
+	// Migrate fields from all
+	echo "Processing: ";
+	foreach ($pnids as $nid) {
+		if (
+			($episode = node_load($nid)) &&
+			($schedule = tal_episode_get_latest_episode_schedule($nid)) &&
+			($schedule->skipMegaphoneSync = true) &&
+			($schedule_wrapper = entity_metadata_wrapper('node', $schedule)) &&
+			($episode_wrapper = entity_metadata_wrapper('node', $episode))
+		) {
+			$epNum = $episode_wrapper->field_episode_number->value();
+			echo "$episode->title ($epNum).  -- ";
+
+			// copy file field values from episode to schedule
+			foreach ($audio_fields as $fieldName => $dirName) {
+				//  get episode file
+				$path = "public://audio/upload/schedule/$dirName";
+				if ($value = $episode_wrapper->$fieldName->value()) $ep_file = file_load($value['fid']);
+
+				//  create new file record
+				if ($value && file_prepare_directory($path, FILE_CREATE_DIRECTORY)) {
+					if ($ep_file) $new_file = file_copy($ep_file, "$path/$epNum.mp3",FILE_EXISTS_REPLACE);
+					if ($new_file) $schedule_wrapper->$fieldName->set([
+						'fid' => $new_file->fid,
+						'display' => 1,
+						'description' => ''
+					]);
+				}
+			}
+
+			// copy midroll
+			$midroll = $episode_wrapper->field_midroll->value();
+			$schedule_wrapper->field_midroll->set($midroll);
+
+			// save schedule
+			$schedule_wrapper->save();
+
+			echo "success\n";
+		}
+	}
+}
+
+/**
+ * Move all air dates for episode air date nodes.
+ * 		- from Fri at 00:00:00 to Fri at 20:00:00
+ * 		- from Sun or Sat back to Fri
+ *
+ * @return void
+ */
+function tal_episode_update_7017() {
+	// get air dates in youtube feed
+	$after =  date('c', strtotime("November 14 2024"));
+
+	// get episode air dates after feed
+	$query = "select n.nid, n.title
+	from node n
+	join field_data_field_radio_air_date rad on (n.nid=rad.entity_id and rad.entity_type='node' and rad.deleted=0)
+	where n.type='schedule'
+	and rad.field_radio_air_date_value is not null
+	and rad.field_radio_air_date_value > '$after'
+	order by n.nid asc";
+	$res = db_query($query)->fetchAllKeyed();
+    $nids = array_keys($res);
+	$schedules = node_load_multiple($nids);
+
+	// loop through and if air date is friday, update to sunday
+	$fri = $sun = $same = $other = $success = $failure = 0;
+	foreach ($schedules as $node) {
+		$air_date = $node->field_radio_air_date[LANGUAGE_NONE][0]['value'];
+		$dateTime = DateTime::createFromFormat('Y-m-d\TH:i:s', $air_date);
+		if (
+			($day = $dateTime->format("D")) &&
+			($hour = $dateTime->format("H")) &&
+			($day == 'Sun' || $day == 'Sat')
+		) {
+			drush_print("Updating $node->type $node->nid $node->title from Sun to Fri...");
+			drush_print("Old date: " . $dateTime->format('D, d M Y H:i:s'));
+			$dateTime->modify('Last Friday 20:00');
+			$newDate = $dateTime->format('D, d M Y H:i:s');
+			drush_print("New date: " . $newDate);
+			$node->field_radio_air_date[LANGUAGE_NONE][0]['value'] = $dateTime->format('Y-m-d\TH:i:s');
+			node_save($node);
+			$sun++;
+		} else if (
+			($day == 'Fri') &&
+			($hour !== "20")
+		) {
+			drush_print("Updating $node->type $node->nid $node->title from Fri at $hour:00:00 to Fri at 20:00:00...");
+			drush_print("Old date: " . $dateTime->format('D, d M Y H:i:s'));
+			$dateTime->modify('20:00:00');
+			$newDate = $dateTime->format('D, d M Y H:i:s');
+			drush_print("New date: " . $newDate);
+			$node->field_radio_air_date[LANGUAGE_NONE][0]['value'] = $dateTime->format('Y-m-d\TH:i:s');
+			node_save($node);
+			$fri++;
+		} else if (
+			($day !== "Fri")
+		) {
+			drush_print("Not updating $node->type $node->nid $node->title from $day $hour:00:00");
+			$other++;
+		} else {
+			$same++;
+		}
+	}
+	drush_print("$sun nodes updated from Sun to Fri.");
+	drush_print("$fri nodes updated from Fri at some other time to 20:00.");
+	drush_print("$other nodes at some day other than Fri or Sun not updated.");
+	drush_print("$same nodes already at the right time.");
+}

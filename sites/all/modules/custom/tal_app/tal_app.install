@@ -1,0 +1,78 @@
+<?php
+
+/**
+ * Uses hook_schema.
+ */
+function tal_app_schema() {
+	$schema['tal_stream'] = array(
+	  'fields' => array(
+		'nid' => array(
+			'type' => 'int',
+			'unsigned' => TRUE,
+			'not null' => TRUE,
+			'default' => 0,
+		),
+		'url' => array(
+			'type' => 'varchar',
+			'length' => 255,
+		),
+		'timestamp' => [
+			'type' => 'int',
+			'unsigned' => TRUE,
+			'not null' => TRUE,
+			'default' => 0,
+		],
+	  ),
+	  'primary key' => array(
+		'nid',
+	  ),
+	);
+	return $schema;
+  }
+  
+  /**
+   * Create episode stream table.
+   */
+  function tal_app_update_7001() {
+	if (!db_table_exists('tal_stream')) {
+		$schema = tal_app_schema();
+		db_create_table('tal_stream', $schema['tal_stream']);
+	}
+  }
+
+  /**
+   *   Fill tal_stream table with existing stream urls.
+   */
+  function tal_app_update_7002() {
+
+	$result = db_query('select field_episode_number_value as epNum, entity_id as nid 
+	from {field_data_field_episode_number} 
+	order by epNum asc');
+	if ($result) {
+		while ( [ 'epNum' => $epNum, 'nid' => $nid ] = $result->fetchAssoc() ) {
+			//  test for existance
+			$url = tal_app_epNum_to_stream_url($epNum);
+			echo "Testing $url...     ";
+			$httpCode = tal_app_stream_test_url($url);
+			echo "$httpCode      ";
+
+			//  Save result
+			$record = [
+				'nid' => $nid,
+				'timestamp' => time()
+			];
+			if (
+				($httpCode == 200)
+			) {
+				$record['url'] = $url;
+				echo "Success.\n";
+			} else {
+				echo "Failure.\n";
+			}
+			db_insert('tal_stream')
+			->fields($record)
+			->execute();
+		}
+	}
+  }
+  
