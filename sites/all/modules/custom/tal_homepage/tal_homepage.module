@@ -1,0 +1,129 @@
+<?php
+/**
+ * @file
+ * Code for the Homepage feature.
+ */
+
+include_once 'tal_homepage.features.inc';
+
+/**
+ * Implements hook_theme.
+ *
+ * @param array $existing
+ * @param string $type
+ * @param string $theme
+ * @param string $path
+ * @return void
+ *
+ * @see https://api.drupal.org/api/drupal/modules%21system%21system.api.php/function/hook_theme/7.x
+ */
+function tal_homepage_theme($existing, $type, $theme, $path) {
+  return array(
+    'homepage_promo' => array(
+      'variables' => array('node' => null),
+      'template' => 'promo',
+      'path' => $path.'/templates',
+    ),
+  );
+}
+
+/**
+ * Initiate variables for promo.tpl.php
+ *
+ * @param array $vars
+ * @return void
+ */
+function template_preprocess_homepage_promo(&$vars) {
+  $node = $vars['node'];
+  $wrapper = entity_metadata_wrapper('node',$node);
+
+  $vars['header'] = $wrapper->field_header->value();
+  $vars['content'] = $wrapper->field_body->value();
+  $vars['cta'] = $wrapper->field_call_to_action->value();
+  $vars['image_link'] = $wrapper->field_image_link->value();
+
+  $bg = $wrapper->field_background_color->value();
+  $text = $wrapper->field_text_color->value();
+  $vars['bgcolor'] = (isset($bg)) ? " style='background: ".$bg['rgb'].";'" : '';
+  $vars['text'] = (isset($text)) ? " style='color: ".$text['rgb'].";'" : '';
+
+  foreach (['image', 'mobile_image'] as $key) {
+    $img = $wrapper->{"field_$key"}->value();
+    $img['path'] = $img['uri'];
+    $vars[$key] = theme_image($img);
+  }
+}
+
+function tal_homepage_get_node() {
+  if ($path = drupal_get_normal_path('home')) {
+    if ($node = menu_get_object('node', 1, $path)) {
+      if ($node->type == 'homepage') {
+        return $node;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Utilizes hook_node_view.
+ *
+ *  Determines whether to show this week or next week depending on what time it is.
+ *
+ * @param obj $node
+ * @param str $view_mode
+ * @param str $langcode
+ * @return void
+ */
+function tal_homepage_node_view($node, $view_mode, $langcode) {
+  if ($node->type == 'homepage') {
+    if ($view_mode == 'full') {
+      //  This Week
+      if ($items = field_get_items('node', $node, 'field_episode')) {
+        if (!empty($items[0]['target_id'])) {
+          $this_week = (!empty($items[0]['entity']) ? $items[0]['entity'] : node_load($items[0]['target_id']));
+          $node->content['this_week'] = node_view($this_week, 'homepage');
+        }
+      }
+
+      if (empty($node->content['this_week'])) {
+        if ($this_week = tal_episode_this_week()) {
+          $node->content['this_week'] = node_view($this_week, 'homepage');
+        }
+      }
+
+      //  Recently Aired
+      $date = REQUEST_TIME - (7*24*60*60) + AIR_DATE_LIVE_OFFSET;  // one week ago
+      $query = db_select('node', 'n');
+      $query->join('field_data_field_radio_air_date', 'rad', "(rad.entity_id = n.nid AND rad.entity_type ='node' AND rad.deleted = 0)");
+      $query->join('field_data_field_episode', 'e', "(e.entity_id = n.nid AND e.entity_type ='node' AND e.deleted = 0)");
+      $query
+        ->fields('e', array('field_episode_target_id'))
+        ->fields('rad', array('field_radio_air_date_value'))
+        ->condition('n.type', 'schedule')
+        ->condition('rad.field_radio_air_date_value', date('c', $date), '<')
+        ->orderBy('rad.field_radio_air_date_value', 'DESC')
+        ->range(0,3);
+      $result = $query->execute();
+      foreach ($result as $row) {
+        if ($episode = node_load($row->field_episode_target_id)) {
+          $episode->field_radio_air_date[LANGUAGE_NONE][0]['value'] = $row->field_radio_air_date_value;
+          $node->content['recently_aired'][] = node_view($episode, 'recently');
+        }
+      }
+
+      //  Promo
+
+      if (
+        ($items = field_get_items('node', $node, 'field_display_promo')) &&
+        (isset($items[0]['value'])) &&
+        ($items[0]['value'] === "1")
+      ) {
+        $node->content['promo'] = theme('homepage_promo', ['node' => $node]);
+      }
+      //  - always add css
+      $css_path = drupal_get_path('module', 'tal_homepage') . "/css/promo.css";
+      drupal_add_css($css_path);
+    }
+  }
+}

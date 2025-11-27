@@ -1,0 +1,67 @@
+<?php
+
+function tal_heartbeat_permission() {
+  return array(
+    'view heartbeat' => array(
+      'title' => t('View Heartbeat'),
+      'description' => t('Read Heartbeat analytics information.'),
+    ),
+  );
+}
+
+/**
+* Implementation of hook_menu().
+*/
+function tal_heartbeat_menu() {
+  $items = array();
+
+  $items['node/%node/heartbeat'] = array(
+    'title' => t('Heartbeat'),
+    'page callback' => 'tal_heartbeat_episode_page',
+    'page arguments' => array(1),
+    'access callback' => 'tal_heartbeat_episode_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+    'file' => 'tal_heartbeat.pages.inc',
+    'weight' => 10,
+  );
+
+  $items['heartbeat'] = array(
+    'title' => t('Heartbeat'),
+    'page callback' => 'tal_heartbeat_listening_page',
+    'access arguments' => array('view heartbeat'),
+    'file' => 'tal_heartbeat.pages.inc',
+  );
+  $items['heartbeat/listening'] = array(
+    'title' => 'Listening',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+  $items['heartbeat/episodes'] = array(
+    'title' => t('Episodes'),
+    'page callback' => 'tal_heartbeat_episodes_page',
+    'access arguments' => array('view heartbeat'),
+    'file' => 'tal_heartbeat.pages.inc',
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  return $items;
+}
+
+function tal_heartbeat_episode_access($node) {
+  if ($node->type == 'episode') {
+    return user_access('view heartbeat');
+  }
+  return false;
+}
+
+/**
+ * Implements hook_entity_info_alter().
+ */
+function tal_heartbeat_entity_info_alter(&$entity_info) {
+  $entity_info['node']['view modes']['heartbeat'] = array(
+    'label' => t('Heartbeat'),
+    'custom settings' => FALSE,
+  );
+};

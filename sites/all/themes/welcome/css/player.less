@@ -1,0 +1,644 @@
+#player {
+  display: none;
+
+  a.close {
+    display: none;
+  }
+}
+
+body.player {
+  #player {
+    display: block;
+  }
+}
+
+#fplayer {
+  .fp-duration,
+  .fp-elapsed,
+  .fp-header,
+  .fp-hidden,
+  .fp-icon,
+  .fp-menu,
+  .fp-pause,
+  .fp-play,
+  .fp-ratio,
+  .fp-remaining,
+  .fp-timestamp,
+  .fp-waiting,
+  video {
+    display: none;
+  }
+}
+@media @onlymobile {
+  body.player-open {
+    overflow: hidden;
+
+    &:after {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      content: '';
+      background: @darkblue;
+      background: rgba(2, 19, 91, 0.9);
+    }
+  }
+
+  #player {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: @white;
+    color: @black;
+    height: 76px;
+    padding: 16px 10px 10px;
+
+    a {
+      color: @red;
+    }
+
+    .time,
+    ul.actions {
+      display: none;
+    }
+
+    .fp-timeline {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      cursor: pointer;
+      background: #fde5e5;
+
+      .fp-progress {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 6px;
+        background: @red;
+      }
+    }
+
+    a.jump {
+      cursor: pointer;
+      position: absolute;
+      top: 0;
+      width: 3px;
+      height: 6px;
+      background: @white;
+    }
+
+    .jp-progress {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      cursor: pointer;
+
+      .jp-seek-bar {
+        height: 6px;
+        background: #fde5e5;
+      }
+
+      .jp-play-bar {
+        height: 6px;
+        background: @red;
+      }
+
+      a.jump {
+        position: absolute;
+        top: 0;
+        width: 3px;
+        height: 6px;
+        background: @white;
+      }
+    }
+
+    .jp-controls {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0;
+      text-align: right;
+
+      li {
+        margin: 0;
+        padding: 0;
+        display: inline-block;
+
+        &.pause {
+          display: none;
+        }
+
+        body.playing & {
+          &.pause {
+            display: inline-block;
+
+            a {
+              display: block !important;
+            }
+          }
+
+          &.play {
+            display: none;
+          }
+        }
+
+        a {
+          display: none;
+          color: @red;
+          width: 50px;
+          height: 50px;
+          .border-radius(50%);
+          border: 2px solid @border;
+          cursor: pointer;
+          font-size: 20px;
+
+          span {
+            display: block;
+            width: 46px;
+            height: 46px;
+            line-height: 46px;
+            text-align: center;
+          }
+
+          &.jp-play {
+            font-size: 18px;
+            padding: 0 0 0 2px;
+            display: block;
+          }
+        }
+      }
+    }
+
+    #player-info {
+      header {
+        position: absolute;
+        top: 16px;
+        left: 10px;
+        right: 70px;
+        bottom: 10px;
+        padding: 5px 0 5px 70px;
+        font: 400 15px/20px @maiola;
+
+        .image {
+          position: absolute;
+          top: 0;
+          left: 0;
+
+          img {
+            width: 50px;
+            height: auto;
+            display: block;
+          }
+        }
+
+        .episode,
+        .title {
+          max-width: 100%;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          display: block !important;
+        }
+      }
+
+      .content {
+        display: none;
+      }
+    }
+
+    body.player-open & {
+      height: 462px;
+      padding: 0;
+
+      a.close {
+        display: block;
+        position: absolute;
+        top: -47px;
+        right: 15px;
+        background: @white;
+        .border-radius(50%);
+        width: 32px;
+        height: 32px;
+
+        span {
+          display: block;
+          width: 32px;
+          height: 32px;
+          text-align: center;
+          line-height: 36px;
+          font-size: 10px;
+        }
+      }
+
+      .time {
+        display: block;
+        font: 400 15px/19px @maiola;
+        color: #555;
+
+        div {
+          position: absolute;
+          top: 10px;
+
+          &.current {
+            left: 18px;
+          }
+
+          &.remaining {
+            right: 18px;
+          }
+        }
+      }
+
+      ul.actions {
+        display: block;
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 106px;
+        text-align: center;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-size: 0;
+
+        li {
+          display: inline-block;
+          vertical-align: top;
+          margin: 0;
+          padding: 0;
+
+          a {
+            display: block;
+            padding: 0 20px;
+            color: @red;
+            line-height: 22px;
+            vertical-align: top;
+
+            .icon {
+              font-size: 16px;
+              vertical-align: middle;
+              display: inline-block;
+            }
+
+            span.label {
+              vertical-align: top;
+              font: 400 18px/22px @maiola;
+              display: inline-block;
+              color: @black;
+              margin-left: 15px;
+            }
+          }
+
+          &.share {
+            border-left: 1px solid @border;
+
+            a {
+              .icon {
+                font-size: 21px;
+              }
+            }
+          }
+        }
+      }
+
+      .jp-controls {
+        position: absolute;
+        top: 44px;
+        left: 0;
+        right: 0;
+        text-align: center;
+
+        li {
+          margin: 0;
+          padding: 0;
+          display: inline-block;
+          vertical-align: middle;
+
+          a {
+            margin: 0 12px;
+            display: block;
+            .border-radius(0);
+            border: none;
+            width: auto;
+            height: 32px;
+            line-height: 32px;
+            font-size: 20px;
+
+            span {
+              width: 32px;
+              height: 32px;
+              line-height: 32px;
+            }
+
+            &.jp-play {
+              font-size: 32px;
+              padding: 0 0 0 2px;
+            }
+
+            &.jp-pause {
+              display: none;
+
+              body.playing & {
+                display: block;
+              }
+            }
+          }
+        }
+      }
+
+      #player-info {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        top: auto;
+        height: 302px;
+        border-top: 1px solid @border;
+        background: #F5F5F5;
+        padding: 40px 18px;
+        overflow: scroll;
+
+        header {
+          position: relative;
+          top: auto;
+          bottom: auto;
+          padding: 5px 0 5px 70px;
+          margin: 0 0 20px;
+        }
+
+        .content {
+          color: #555;
+          display: block;
+          overflow: scroll;
+          .body-3;
+
+          .contributor {
+            margin: 0 0 4px;
+
+            a {
+              color: @red;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+@media @tablet {
+  body.player {
+    #site-header {
+      height: 122px;
+    }
+  }
+
+  #player {
+    height: 61px;
+    background: @white;
+    color: @black;
+    position: relative;
+    padding: 15px 20px 21px;
+
+    a {
+      color: @red;
+    }
+
+    .fp-timeline {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      cursor: pointer;
+      background: #fde5e5;
+
+      .fp-progress {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        height: 6px;
+        background: @red;
+      }
+    }
+
+    a.jump {
+      position: absolute;
+      bottom: 0;
+      width: 3px;
+      height: 6px;
+      background: @white;
+    }
+
+    .jp-progress {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      cursor: pointer;
+
+      .jp-seek-bar {
+        height: 6px;
+        background: #fde5e5;
+      }
+
+      .jp-play-bar {
+        height: 6px;
+        background: @red;
+      }
+    }
+
+    a.jump {
+      cursor: pointer;
+      position: absolute;
+      bottom: 0;
+      width: 3px;
+      height: 6px;
+      background: @white;
+    }
+
+    .jp-controls {
+      position: absolute;
+      top: 15px;
+      left: 8px;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0;
+      height: 25px;
+
+      li {
+        margin: 0;
+        padding: 0;
+        display: inline-block;
+        vertical-align: top;
+
+        &.pause {
+          width: 44px;
+          display: none;
+        }
+
+        &.play {
+          width: 44px;
+        }
+
+        body.playing & {
+          &.pause {
+            display: inline-block;
+          }
+
+          &.play {
+            display: none;
+          }
+        }
+
+        a {
+          outline: none;
+          cursor: pointer;
+          margin: 0 12px;
+          display: block;
+          .border-radius(0);
+          border: none;
+          width: auto;
+          height: 25px;
+          line-height: 25px;
+          font-size: 20px;
+
+          span {
+            width: 25px;
+            height: 25px;
+            line-height: 25px;
+          }
+
+          &.jp-play {
+            font-size: 25px;
+            padding: 0 0 0 2px;
+            width: 20px;
+          }
+
+          &.jp-pause {
+            width: 20px;
+            display: none;
+
+            body.playing & {
+              display: block;
+            }
+          }
+        }
+      }
+    }
+
+    .time {
+      position: absolute;
+      top: 15px;
+      right: 102px;
+      font-size: 0;
+      height: 24px;
+
+      div {
+        display: inline-block;
+        font: 400 14px/21px @maiola;
+        vertical-align: top;
+        margin: 0 0 0 4px;
+
+        span {
+          width: 32px;
+          display: inline-block;
+        }
+
+        &.current {
+          &:after {
+            content: '/';
+            display: inline-block;
+            margin: 0 0 0 4px;
+          }
+        }
+
+        &.remaining {
+          &:before {
+            content: '-';
+            display: inline-block;
+            margin: 0 1px 0 0;
+          }
+        }
+      }
+    }
+
+    ul.actions {
+      position: absolute;
+      top: 15px;
+      right: 20px;
+      line-height: 24px;
+      height: 24px;
+      font-size: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+
+      li {
+        margin: 0 0 0 20px;
+        padding: 0;
+        display: inline-block;
+        vertical-align: top;
+
+        a {
+          display: block;
+          font-size: 21px;
+          vertical-align: middle;
+
+          &.cut {
+            font-size: 18px;
+            padding-top: 2px;
+            line-height: 22px;
+          }
+
+          .label {
+            display: none;
+          }
+        }
+      }
+    }
+
+    #player-info {
+      position: absolute;
+      top: 15px;
+      left: 234px;
+      font-size: 0;
+
+      header {
+        height: 24px;
+
+        .image {
+          display: none;
+        }
+
+        div {
+          display: inline-block;
+          vertical-align: top;
+          margin: 0 4px 0 0;
+          font: 400 14px/21px @maiola;
+
+          &.title {
+            display: none;
+
+            &:before {
+              content: '/';
+              display: inline-block;
+              margin: 0 4px 0 0;
+            }
+          }
+        }
+      }
+
+      .content {
+        display: none;
+      }
+    }
+  }
+}
