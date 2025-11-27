@@ -1,0 +1,4 @@
+name = App
+core = 7.x
+package = This American Life
+dependencies[] = tal_episode

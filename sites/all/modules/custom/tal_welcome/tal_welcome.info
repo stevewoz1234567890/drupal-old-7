@@ -1,0 +1,9 @@
+name = Welcome
+core = 7.x
+package = This American Life
+dependencies[] = features
+dependencies[] = tal_episode
+dependencies[] = text
+features[features_api][] = api:2
+features[field_instance][] = node-welcome-body
+features[node][] = welcome

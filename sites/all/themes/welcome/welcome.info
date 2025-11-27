@@ -1,0 +1,8 @@
+name = Welcome
+description = Welcome to Public Radio theme
+core = 7.x
+base theme = thislife
+
+scripts[] = js/main.js
+
+stylesheets[all][] = css/main.css
