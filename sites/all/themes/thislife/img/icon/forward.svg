@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="19px" viewBox="0 0 16 19" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <!-- Generator: Sketch 43.2 (39069) - http://www.bohemiancoding.com/sketch -->
+    <title>forward 10</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Player" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="TAL-Player-00" transform="translate(-146.000000, -18.000000)" fill="#EC0000">
+            <g id="GLOBAL-PLAYER">
+                <g id="play-controls" transform="translate(20.000000, 15.000000)">
+                    <path d="M133.892384,5.96599038 L133.134594,5.96599038 L133.134594,3 L127.516338,7.1026755 L133.134594,11.205351 L133.134594,8.23936063 L133.892384,8.23936063 C136.99023,8.23936063 139.510639,10.7597704 139.510639,13.8583741 C139.510639,16.9554622 136.99023,19.4766298 133.892384,19.4766298 C130.794538,19.4766298 128.27337,16.9554622 128.27337,13.8583741 L126,13.8583741 C126,18.2096047 129.540395,21.75 133.892384,21.75 C138.243614,21.75 141.78401,18.2096047 141.78401,13.8583741 C141.78401,9.50638564 138.243614,5.96599038 133.892384,5.96599038" id="forward-10" transform="translate(133.892005, 12.375000) scale(-1, 1) translate(-133.892005, -12.375000) "></path>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>

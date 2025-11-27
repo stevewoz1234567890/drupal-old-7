@@ -1,0 +1,25 @@
+name = This American Life
+description = Custom responsive theme for This American Life
+core = 7.x
+
+scripts[] = js/min/plugins.min.js
+scripts[] = bower_components/jPlayer/dist/jplayer/jquery.jplayer.min.js
+scripts[] = bower_components/fingerprintjs2/fingerprint2.js
+scripts[] = bower_components/cookieconsent/build/cookieconsent.min.js
+scripts[] = js/min/micromodal.min.js
+
+scripts[] = js/main.js
+
+stylesheets[all][] = bower_components/normalize-css/normalize.css
+stylesheets[all][] = bower_components/cookieconsent/build/cookieconsent.min.css
+stylesheets[all][] = css/icomoon.css
+stylesheets[all][] = css/main.css
+stylesheets[print][] = css/print.css
+
+regions[top] = Top
+regions[content] = Content
+regions[sidebar_first] = Sidebar
+regions[footer] = Footer
+
+features[] = name
+features[] = main_menu

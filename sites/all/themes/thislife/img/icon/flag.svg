@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="43px" height="32px" viewBox="0 0 43 32" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <!-- Generator: Sketch 43.2 (39069) - http://www.bohemiancoding.com/sketch -->
+    <title>flag</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Nav-/-Footer" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Nav-Donate" transform="translate(-60.000000, -14.000000)" fill-rule="nonzero" fill="#FFFFFF">
+            <g id="Nav-w/-bg">
+                <g id="White-Logo---1-Horizontal" transform="translate(60.000000, 14.000000)">
+                    <g id="flag">
+                        <polygon id="Shape" points="19.8968889 12.3982222 42.0764444 12.4444444 42.0764444 8.73244444 19.8968889 8.68622222"></polygon>
+                        <polygon id="Shape" points="19.8968889 0 19.8968889 3.712 42.0764444 3.75822222 42.0764444 0.0462222222"></polygon>
+                        <rect id="Rectangle-path" x="0" y="0" width="14.6453333" height="12.3982222"></rect>
+                        <polygon id="Shape" points="0 17.3688889 0 21.0844444 14.9262222 21.1057778 14.9262222 31.648 23.8613333 21.1057778 42.0764444 21.1306667 42.0764444 17.4151111"></polygon>
+                    </g>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>

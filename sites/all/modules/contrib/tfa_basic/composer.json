@@ -1,0 +1,15 @@
+{
+  "name": "drupal/tfa_basic",
+  "type": "drupal-module",
+  "description": "Basic plugins for Drupal TFA module.",
+  "keywords": ["Drupal"],
+  "license": "GPL-2.0+",
+  "authors": [],
+  "support": {},
+  "require": {
+    "drupal/tfa": "^2.0"
+  },
+  "require-dev": {
+
+  }
+}

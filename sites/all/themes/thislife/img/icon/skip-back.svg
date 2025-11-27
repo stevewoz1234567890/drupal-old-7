@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <!-- Generator: Sketch 43.2 (39069) - http://www.bohemiancoding.com/sketch -->
+    <title>skip back</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Player" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="TAL-Player-00" transform="translate(-20.000000, -20.000000)" fill="#EC0000">
+            <g id="GLOBAL-PLAYER">
+                <g id="play-controls" transform="translate(20.000000, 15.000000)">
+                    <g id="skip-back" transform="translate(0.000000, 5.000000)">
+                        <rect id="Rectangle-24" x="0" y="0" width="2.08333333" height="15.625"></rect>
+                        <polygon id="Triangle" transform="translate(9.830729, 7.812500) rotate(-180.000000) translate(-9.830729, -7.812500) " points="15.6901042 7.8125 3.97135417 15.625 3.97135417 -3.07446376e-15"></polygon>
+                    </g>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>

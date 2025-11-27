@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="19px" viewBox="0 0 16 19" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <!-- Generator: Sketch 43.2 (39069) - http://www.bohemiancoding.com/sketch -->
+    <title>rewind 10</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Player" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="TAL-Player-00" transform="translate(-61.000000, -18.000000)" fill="#EC0000">
+            <g id="GLOBAL-PLAYER">
+                <g id="play-controls" transform="translate(20.000000, 15.000000)">
+                    <path d="M48.8923837,5.96599038 L48.1345936,5.96599038 L48.1345936,3 L42.516338,7.1026755 L48.1345936,11.205351 L48.1345936,8.23936063 L48.8923837,8.23936063 C51.9902296,8.23936063 54.5106394,10.7597704 54.5106394,13.8583741 C54.5106394,16.9554622 51.9902296,19.4766298 48.8923837,19.4766298 C45.7945378,19.4766298 43.2733702,16.9554622 43.2733702,13.8583741 L41,13.8583741 C41,18.2096047 44.5403953,21.75 48.8923837,21.75 C53.2436144,21.75 56.7840096,18.2096047 56.7840096,13.8583741 C56.7840096,9.50638564 53.2436144,5.96599038 48.8923837,5.96599038" id="rewind-10"></path>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>
